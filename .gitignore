@@ -30,3 +30,7 @@ Manifest*.toml
 LocalPreferences.toml
 JuliaLocalPreferences.toml
 
+# Local-only COMSOL far-field spot-check (single-point, Python toolchain — kept out of the sweep record)
+validation/comsol/comsol_farfield.ipynb
+validation/comsol/results/farfield.csv
+

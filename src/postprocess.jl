@@ -85,9 +85,11 @@ function _energy_density(mode, grid, inv_ϵr)
     ε_ρρ = reshape(1.0 ./ diag(inv_ϵr)[1:N],     grid.Nρ, grid.Nz)
     ε_ϕϕ = reshape(1.0 ./ diag(inv_ϵr)[N+1:2N],  grid.Nρ, grid.Nz)
     ε_zz = reshape(1.0 ./ diag(inv_ϵr)[2N+1:3N], grid.Nρ, grid.Nz)
-    return real.(ε_ρρ) .* abs2.(mode.Eρ) .+
-           real.(ε_ϕϕ) .* abs2.(mode.Eϕ) .+
-           real.(ε_zz) .* abs2.(mode.Ez)
+    W = real.(ε_ρρ) .* abs2.(mode.Eρ) .+
+        real.(ε_ϕϕ) .* abs2.(mode.Eϕ) .+
+        real.(ε_zz) .* abs2.(mode.Ez)
+    W[1, :] .= (real.(ε_ρρ[1, :]) .+ real.(ε_ϕϕ[1, :])) .* abs2.(mode.Eρ[1, :])
+    return W
 end
 
 function confinement_factor(W, grid)

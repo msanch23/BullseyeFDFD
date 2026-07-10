@@ -1,6 +1,6 @@
 name = "BullseyeFDFD"
 uuid = "830c5485-98b4-4259-909c-01fc509337e2"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Martin Sanchez <masanchez09@icloud.com>"]
 
 [deps]

@@ -39,7 +39,19 @@ grid = conformal_grid(geometry, λ_target);
 show_sim(ϵ, grid);
 
 # --- simulation setup ---
+@time sim = solve_sim(grid, ϵ, λ_target;
+                      Nmodes=3);
+
 NA = 0.4;
+@time sim = solve_sim(grid, ϵ, λ_target, NA;
+                      Nmodes=3);
+
+λ_drive = 0.781;
+src = dipole(grid, λ_drive);
+
+sim = solve_sim(grid, ϵ, λ_target;
+                source=src);
+
 src = dipole(grid);
 
 @time sim = solve_sim(grid, ϵ, λ_target, NA;

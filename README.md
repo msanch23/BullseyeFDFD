@@ -18,7 +18,7 @@ Requires Julia ≥ 1.12.
 ## Status / Scope
 - [X] Forward simulation + modal/driven analysis
 - [X] Convergence + Time/Ram curves — [view the convergence study](validation/convergence/simulation_convergence.ipynb)
-- [ ] COMSOL Validation
+- [X] COMSOL Validation
 - [ ] Adjoint Optimization
 - [ ] Add examples of published papers
 - [ ] Experimental Validation
@@ -96,9 +96,9 @@ Eigenmode Analysis Report
 =================================================
 mode | λ (nm)  | Q      | Fp    | V(λ/n)³ | CF    
 -------------------------------------------------
-1    | 780.00  | 354.4  | 12.3  | 2.1924  | 0.1276
-2    | 784.17  | 26.5   | 0.1   | 24.3722 | 0.0103
-3    | 776.85  | 25.7   | 0.1   | 19.1013 | 0.0142
+1    | 780.00  | 354.4  | 12.1  | 2.2289  | 0.1276
+2    | 784.17  | 26.5   | 0.1   | 19.1459 | 0.0135
+3    | 776.85  | 25.7   | 0.1   | 13.3280 | 0.0206
 =================================================
 ```
 Note that `mode 1` is the fundamental mode, and `mode 2` & `mode 3` are spurious/leaky modes.
@@ -115,9 +115,9 @@ Eigenmode Analysis Report
 ======================================================================
 mode | λ (nm)  | Q      | Fp    | η (%)  | Gauss. | V(λ/n)³ | CF    
 ----------------------------------------------------------------------
-1    | 780.00  | 354.4  | 12.3  | 16.45  | 0.4891 | 2.1924  | 0.1276
-2    | 784.17  | 26.5   | 0.3   | 0.00   | 0.3458 | 6.5650  | 0.0135
-3    | 776.85  | 25.7   | 0.4   | 0.00   | 0.3194 | 4.7698  | 0.0206
+1    | 780.00  | 354.4  | 12.1  | 16.45  | 0.4891 | 2.2289  | 0.1276
+2    | 784.17  | 26.5   | 0.1   | 0.00   | 0.5501 | 14.8609 | 0.0155
+3    | 776.85  | 25.7   | 0.2   | 0.00   | 0.5298 | 10.4172 | 0.0233
 ======================================================================
 ```
 Plots of the electric field, far-field, and k-space are automatically generated.
@@ -156,9 +156,9 @@ Eigenmode Analysis Report
 ======================================================================
 mode | λ (nm)  | Q      | Fp    | η (%)  | Gauss. | V(λ/n)³ | CF    
 ----------------------------------------------------------------------
-1    | 780.00  | 354.4  | 12.3  | 16.45  | 0.4891 | 2.1924  | 0.1276
-2    | 784.17  | 26.5   | 0.1   | 0.00   | 0.5501 | 15.3970 | 0.0155
-3    | 776.85  | 25.7   | 0.2   | 0.00   | 0.5298 | 10.4346 | 0.0233
+1    | 780.00  | 354.4  | 12.1  | 16.45  | 0.4891 | 2.2289  | 0.1276
+2    | 784.17  | 26.5   | 0.1   | 0.00   | 0.3244 | 28.6791 | 0.0090
+3    | 776.85  | 25.7   | 0.1   | 0.00   | 0.2757 | 19.9725 | 0.0133
 ======================================================================
 
 Purcell factor = 10.393 @ 780.00 nm
@@ -191,7 +191,7 @@ A paper is in preparation; details will be updated on publication. For now:
   title        = {{BullseyeFDFD}: a cylindrical FDFD solver for
                   bullseye (circular Bragg grating) cavities},
   year         = {2026},
-  version      = {0.2.0},
+  version      = {0.3.0},
   howpublished = {\url{https://github.com/msanch23/BullseyeFDFD}}
 }
 ```
