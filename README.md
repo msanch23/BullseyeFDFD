@@ -69,8 +69,8 @@ For a slotted cavity, pass `slotted=true`; the first entry is then the central s
 ### Mesh & Visualization
 To mesh the geometry, we need to specify a target λ since `conformal_grid()` calculates the size of the cell based on the simulation wavelength:
 ```julia
-λ_target = 0.780;
-grid = conformal_grid(geometry, λ_target);
+λ0 = 0.780;
+grid = conformal_grid(geometry, λ0);
 ```
 Then we can paint the Bullseye geometry on to the grid, and plot the cross-section for verification:
 ```julia
@@ -87,38 +87,38 @@ Which should produce a cross-section plot of the Bullseye geometry:
 #### Eigenfrequency
 For solving the eigenfrequency, we just have to specify `Nmodes`:
 ```julia
-sim = solve_sim(grid, ϵ, λ_target;
+sim = solve_sim(grid, ϵ, λ0;
                 Nmodes=3);
 ```
 running it will produce the following table:
 ```
 Eigenmode Analysis Report
-=================================================
-mode | λ (nm)  | Q      | Fp    | V(λ/n)³ | CF    
--------------------------------------------------
-1    | 780.00  | 354.4  | 12.1  | 2.2289  | 0.1276
-2    | 784.17  | 26.5   | 0.1   | 19.1459 | 0.0135
-3    | 776.85  | 25.7   | 0.1   | 13.3280 | 0.0206
-=================================================
+==================================================
+mode | λ (nm)  | Q      | V(λ/n)³ | Fp    | CF    
+--------------------------------------------------
+1    | 780.00  | 354.4  | 2.2289  | 12.1  | 0.1276
+2    | 784.17  | 26.5   | 28.5741 | 0.1   | 0.0130
+3    | 776.85  | 25.7   | 20.4957 | 0.1   | 0.0184
+==================================================
 ```
 Note that `mode 1` is the fundamental mode, and `mode 2` & `mode 3` are spurious/leaky modes.
 and if we specify a numerical aperture:
 ```julia
 NA = 0.4;
 
-@time sim = solve_sim(grid, ϵ, λ_target, NA;
+@time sim = solve_sim(grid, ϵ, λ0, NA;
                       Nmodes=3);
 ```
 columns are added for figure-of-merits involving the NA:
 ```
 Eigenmode Analysis Report
-======================================================================
-mode | λ (nm)  | Q      | Fp    | η (%)  | Gauss. | V(λ/n)³ | CF    
-----------------------------------------------------------------------
-1    | 780.00  | 354.4  | 12.1  | 16.45  | 0.4891 | 2.2289  | 0.1276
-2    | 784.17  | 26.5   | 0.1   | 0.00   | 0.5501 | 14.8609 | 0.0155
-3    | 776.85  | 25.7   | 0.2   | 0.00   | 0.5298 | 10.4172 | 0.0233
-======================================================================
+====================================================================
+mode | λ (nm)  | Q      | V(λ/n)³ | Fp    | η (%)  | Gauss. | CF    
+--------------------------------------------------------------------
+1    | 780.00  | 354.4  | 2.2289  | 12.1  | 16.45  | 0.4891 | 0.1276
+2    | 784.17  | 26.5   | 33.2290 | 0.1   | 0.00   | 0.3412 | 0.0067
+3    | 776.85  | 25.7   | 23.8573 | 0.1   | 0.00   | 0.3585 | 0.0094
+====================================================================
 ```
 Plots of the electric field, far-field, and k-space are automatically generated.
 <p align="center">
@@ -132,7 +132,7 @@ To drive the cavity with a point dipole at a specified wavelength and get its LD
 λ_drive = 0.781;
 src = dipole(grid, λ_drive);
 
-sim = solve_sim(grid, ϵ, λ_target;
+sim = solve_sim(grid, ϵ, λ0;
                       source=src);
 ```
 Running the solver produces the following lines:
@@ -147,19 +147,19 @@ Leaving the wavelength out of the source will cause the driven simulation to use
 ```julia
 src = dipole(grid);
 
-@time sim = solve_sim(grid, ϵ, λ_target, NA;
+@time sim = solve_sim(grid, ϵ, λ0, NA;
                       Nmodes=3, source=src);
 ```
 which produces the following:
 ```
 Eigenmode Analysis Report
-======================================================================
-mode | λ (nm)  | Q      | Fp    | η (%)  | Gauss. | V(λ/n)³ | CF    
-----------------------------------------------------------------------
-1    | 780.00  | 354.4  | 12.1  | 16.45  | 0.4891 | 2.2289  | 0.1276
-2    | 784.17  | 26.5   | 0.1   | 0.00   | 0.3244 | 28.6791 | 0.0090
-3    | 776.85  | 25.7   | 0.1   | 0.00   | 0.2757 | 19.9725 | 0.0133
-======================================================================
+====================================================================
+mode | λ (nm)  | Q      | V(λ/n)³ | Fp    | η (%)  | Gauss. | CF    
+--------------------------------------------------------------------
+1    | 780.00  | 354.4  | 2.2289  | 12.1  | 16.45  | 0.4891 | 0.1276
+2    | 784.17  | 26.5   | 24.0908 | 0.1   | 0.00   | 0.7054 | 0.0141
+3    | 776.85  | 25.7   | 19.1814 | 0.1   | 0.00   | 0.6722 | 0.0206
+====================================================================
 
 Purcell factor = 10.393 @ 780.00 nm
 ρ polarized dipole @ (ρ,z): (2, 69)
@@ -191,7 +191,7 @@ A paper is in preparation; details will be updated on publication. For now:
   title        = {{BullseyeFDFD}: a cylindrical FDFD solver for
                   bullseye (circular Bragg grating) cavities},
   year         = {2026},
-  version      = {0.3.0},
+  version      = {0.4.0},
   howpublished = {\url{https://github.com/msanch23/BullseyeFDFD}}
 }
 ```

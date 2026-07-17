@@ -147,23 +147,23 @@ end
 function report_modes(modes)
     isempty(modes) && return
     has_coll = hasproperty(first(modes), :η)
-    w  = has_coll ? 70 : 49
+    w  = has_coll ? 68 : 50
     println("\nEigenmode Analysis Report"); println(repeat("=", w))
     if has_coll
-        @printf("%-4s | %-7s | %-6s | %-5s | %-6s | %-6s | %-7s | %-6s\n",
-                "mode","λ (nm)","Q","Fp","η (%)","Gauss.","V(λ/n)³","CF")
+        @printf("%-4s | %-7s | %-6s | %-7s | %-5s | %-6s | %-6s | %-6s\n",
+                "mode","λ (nm)","Q","V(λ/n)³","Fp","η (%)","Gauss.","CF")
     else
-        @printf("%-4s | %-7s | %-6s | %-5s | %-7s | %-6s\n",
-                "mode","λ (nm)","Q","Fp","V(λ/n)³","CF")
+        @printf("%-4s | %-7s | %-6s | %-7s | %-5s | %-6s\n",
+                "mode","λ (nm)","Q","V(λ/n)³","Fp","CF")
     end
     println(repeat("-", w))
     for (i, m) in enumerate(modes)
         if has_coll
-            @printf("%-4d | %-7.2f | %-6.1f | %-5.1f | %-6.2f | %-6.4f | %-7.4f | %-6.4f\n",
-                    i, m.λ*1000, m.Q, m.Fp, 100*m.η, m.gaussicity, m.V_eff, m.CF)
+            @printf("%-4d | %-7.2f | %-6.1f | %-7.4f | %-5.1f | %-6.2f | %-6.4f | %-6.4f\n",
+                    i, m.λ*1000, m.Q, m.V_eff, m.Fp, 100*m.η, m.gaussicity, m.CF)
         else
-            @printf("%-4d | %-7.2f | %-6.1f | %-5.1f | %-7.4f | %-6.4f\n",
-                    i, m.λ*1000, m.Q, m.Fp, m.V_eff, m.CF)
+            @printf("%-4d | %-7.2f | %-6.1f | %-7.4f | %-5.1f | %-6.4f\n",
+                    i, m.λ*1000, m.Q, m.V_eff, m.Fp, m.CF)
         end
     end
     println(repeat("=", w)); println()

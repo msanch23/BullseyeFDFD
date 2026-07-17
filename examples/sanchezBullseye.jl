@@ -31,28 +31,28 @@ design = [0.355000,             # eye
 geometry = build_geometry(design, substrates, nClad, nSiN, tCBG);
 
 # --- mesh ---
-λ_target = 0.780;
-grid = conformal_grid(geometry, λ_target);
+λ0 = 0.780;
+grid = conformal_grid(geometry, λ0);
 
 # --- bullseye generation ---
 ϵ = build_epsilon(geometry, grid);
 show_sim(ϵ, grid);
 
 # --- simulation setup ---
-@time sim = solve_sim(grid, ϵ, λ_target;
+@time sim = solve_sim(grid, ϵ, λ0;
                       Nmodes=3);
 
 NA = 0.4;
-@time sim = solve_sim(grid, ϵ, λ_target, NA;
+@time sim = solve_sim(grid, ϵ, λ0, NA;
                       Nmodes=3);
 
 λ_drive = 0.781;
 src = dipole(grid, λ_drive);
 
-sim = solve_sim(grid, ϵ, λ_target;
+sim = solve_sim(grid, ϵ, λ0;
                 source=src);
 
 src = dipole(grid);
 
-@time sim = solve_sim(grid, ϵ, λ_target, NA;
+@time sim = solve_sim(grid, ϵ, λ0, NA;
                       Nmodes=3, source=src);
