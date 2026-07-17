@@ -1,4 +1,4 @@
-# Maxwell's Equations
+# Cylindrical FDFD Formulation
 The most general form of Maxwell's equations are the time-domain integral form:
 $$\begin{equation}
 \begin{array}{cc}
@@ -39,13 +39,13 @@ $$\begin{equation}
 
 Note that $\epsilon=\epsilon_0\epsilon_r$ and $\mu=\mu_0\mu_r$ are complex tensors.
 
-Finally, we normalize all of the functions and parameters so that they are all the same order of magnitude by letting $\vec{\tilde{H}}=-j\eta_0\vec{H}$. We also divide divergence equations by $\epsilon_0$ and $\mu_0$ respectively:
+Finally, we normalize all of the functions and parameters so that they are all the same order of magnitude by letting $\vec{\tilde{H}}=-j\eta_0\vec{H}$, where $\eta_0=\sqrt{\mu_0/\epsilon_0}$ is the free-space impedance. We also divide divergence equations by $\epsilon_0$ and $\mu_0$ respectively:
 
 $$\begin{equation}
 \begin{array}{cc} 
-\displaystyle \nabla\cdot\left(\epsilon_r\vec{E}\right) = 0
+\displaystyle \nabla\cdot\left(\epsilon_r\vec{E}\right) = \rho_\mathrm{v}/\epsilon_0
 &
-\displaystyle \nabla\cdot\left(\mu_r\vec{H}\right) = 0
+\displaystyle \nabla\cdot\left(\mu_r\vec{\tilde{H}}\right) = 0
 \\[1em]
 \displaystyle \nabla\times\vec{E}=k_0\mu_r\vec{\tilde{H}}
 &
@@ -53,6 +53,8 @@ $$\begin{equation}
 & =\vec{\tilde{J}}+k_0\epsilon_r\vec{E}
 \end{array}
 \end{equation}$$
+
+Note that we made use of the free-space wavenumber, defined as $k_0=\omega\sqrt{\mu_0\epsilon_0}=\omega/c$.
 
 ## Cylindrical Coordinate Expansion 
 Going forward, we focus primarily on the curl equations.
@@ -66,15 +68,15 @@ $$\begin{equation}
 \begin{array}{cc} 
 \displaystyle \frac{1}{\rho}\frac{\partial E_z}{\partial\phi} - \frac{\partial E_\phi}{\partial z} = k_0\mu_{\rho\rho}\tilde{H}_\rho + k_0\mu_{\rho\phi}\tilde{H}_\phi + k_0\mu_{\rho z}\tilde{H}_z
 \quad & \quad
-\displaystyle \frac{1}{\rho}\frac{\partial \tilde{H}_z}{\partial\phi} - \frac{\partial \tilde{H}_\phi}{\partial z} = \vec{\tilde{J}}_\rho + k_0\epsilon_{\rho\rho}E_\rho + k_0\epsilon_{\rho\phi}E_\phi + k_0\epsilon_{\rho z}E_z
+\displaystyle \frac{1}{\rho}\frac{\partial \tilde{H}_z}{\partial\phi} - \frac{\partial \tilde{H}_\phi}{\partial z} = \tilde{J}_\rho + k_0\epsilon_{\rho\rho}E_\rho + k_0\epsilon_{\rho\phi}E_\phi + k_0\epsilon_{\rho z}E_z
 \\[2em]
 \displaystyle \frac{\partial E_\rho}{\partial z} - \frac{\partial E_z}{\partial\rho} = k_0\mu_{\phi\rho}\tilde{H}_\rho + k_0\mu_{\phi\phi}\tilde{H}_\phi + k_0\mu_{\phi z}\tilde{H}_z
 \quad & \quad
-\displaystyle \frac{\partial \tilde{H}_\rho}{\partial z} - \frac{\partial \tilde{H}_z}{\partial\rho} = k_0\epsilon_{\phi\rho}E_\rho + \vec{\tilde{J}}_\phi + k_0\epsilon_{\phi\phi}E_\phi + k_0\epsilon_{\phi z}E_z
+\displaystyle \frac{\partial \tilde{H}_\rho}{\partial z} - \frac{\partial \tilde{H}_z}{\partial\rho} = k_0\epsilon_{\phi\rho}E_\rho + \tilde{J}_\phi + k_0\epsilon_{\phi\phi}E_\phi + k_0\epsilon_{\phi z}E_z
 \\[2em]
 \displaystyle \frac{1}{\rho}\left(\frac{\partial \left(\rho E_\phi\right)}{\partial\rho} - \frac{\partial E_\rho}{\partial \phi}\right) = k_0\mu_{z\rho}\tilde{H}_\rho + k_0\mu_{z\phi}\tilde{H}_\phi + k_0\mu_{zz}\tilde{H}_z
 \quad & \quad
-\displaystyle \frac{1}{\rho}\left(\frac{\partial \left(\rho \tilde{H}_\phi\right)}{\partial\rho} - \frac{\partial \tilde{H}_\rho}{\partial \phi}\right) = k_0\epsilon_{z\rho}E_\rho + k_0\epsilon_{z\phi}E_\phi + \vec{\tilde{J}}_z + k_0\epsilon_{zz}E_z
+\displaystyle \frac{1}{\rho}\left(\frac{\partial \left(\rho \tilde{H}_\phi\right)}{\partial\rho} - \frac{\partial \tilde{H}_\rho}{\partial \phi}\right) = k_0\epsilon_{z\rho}E_\rho + k_0\epsilon_{z\phi}E_\phi + \tilde{J}_z + k_0\epsilon_{zz}E_z
 \end{array}
 \end{equation}$$
 
@@ -191,17 +193,4 @@ k_0\begin{bmatrix}
 E_\rho\\[1em]E_\phi\\[1em]E_z
 \end{bmatrix}\end{equation}$$
 
-## Eigenfrequency & Driven/Scattering Simulations
-
-We can now simplify the notation to 
-$$\begin{equation}\textbf{C}_e\mathbf{e}=k_0[\mu]\mathbf{h}\end{equation}$$
-$$\begin{equation}\textbf{C}_h\mathbf{h}=\mathbf{\tilde{j}}+k_0[\epsilon]\mathbf{e}\end{equation}$$
-
-Solving Equation 10 for $\mathbf{h}$ yields $\mathbf{h}=k^{-1}_0[\mu]^{-1}\mathbf{C}_e\mathbf{e}$
-
-Plugging in $\mathbf{h}$ into Equation 11 gives:
-$$\begin{equation}\begin{aligned}
-\textbf{C}_h(k^{-1}_0[\mu]^{-1}\mathbf{C}_e\mathbf{e})&=\mathbf{\tilde{j}}+k_0[\epsilon]\mathbf{e}\\
-([\epsilon]^{-1}\mathbf{C}_h[\mu]^{-1}\mathbf{C}_e-k^2_0)\mathbf{e}&=k_0[\epsilon]^{-1}\mathbf{\tilde{j}}\\
-(\mathbf{A}-k^2_0\mathbf{I})\mathbf{e}&=\mathbf{b}
-\end{aligned}\end{equation}$$
+We show how to solve these decomposed equations in [`system-assembly.md`](system-assembly.md) by casting them into a discrete linear system, which can be solved for either the eigenfrequency or the driven case.
