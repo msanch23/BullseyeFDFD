@@ -5,37 +5,40 @@ struct FOMTerm
     label::String
 end
 
-_lorentz_gate(o0, σ) = o -> (Δ = o - o0; G = 1/(1 + (Δ/σ)^2); (G, -2Δ/σ^2 * G^2))
+_lorentz_gate(o0, σ) = o -> (Δ = o - o0;      G = 1/(1 + (Δ/σ)^2); (G, -2Δ/σ^2 * G^2))
+_sq_penalty(o0, w)   = o -> (Δ = (o - o0)/o0;                       (w*Δ^2, 2w*Δ/o0))
 
 λ_target(λ0; σ=0.010) =
     FOMTerm(:λ, :gate, _lorentz_gate(λ0, σ), "λ_target($λ0; σ=$σ)")
 
-function Q_target(spec; σ=nothing)
-    spec === :max && return FOMTerm(:Q, :reward, o -> (o, 1.0), "Q_target(:max)")
-    Q0 = float(spec); s = something(σ, 0.1Q0)
-    FOMTerm(:Q, :gate, _lorentz_gate(Q0, s), "Q_target($Q0; σ=$s)")
-end
+Q_target(spec; w=1.0) =
+    spec === :max ? FOMTerm(:Q, :reward,  o -> (o, 1.0),               "Q_target(:max)") :
+                    FOMTerm(:Q, :penalty, _sq_penalty(float(spec), w), "Q_target($(float(spec)); w=$w)")
 
-function Fp_target(spec; σ=nothing)
-    spec === :max && return FOMTerm(:Fp, :reward, o -> (o, 1.0), "Fp_target(:max)")
-    Fp0 = float(spec); s = something(σ, 0.1Fp0)
-    FOMTerm(:Fp, :gate, _lorentz_gate(Fp0, s), "Fp_target($Fp0; σ=$s)")
-end
+Fp_target(spec; w=1.0) =
+    spec === :max ? FOMTerm(:Fp, :reward,  o -> (o, 1.0),               "Fp_target(:max)") :
+                    FOMTerm(:Fp, :penalty, _sq_penalty(float(spec), w), "Fp_target($(float(spec)); w=$w)")
 
-function V_target(spec; σ=nothing)
-    spec === :min && return FOMTerm(:V, :reward, o -> (1/o, -1/o^2), "V_target(:min)")
-    V0 = float(spec); s = something(σ, 0.1V0)
-    FOMTerm(:V, :gate, _lorentz_gate(V0, s), "V_target($V0; σ=$s)")
-end
+V_target(spec; w=1.0) =
+    spec === :min ? FOMTerm(:V, :reward,  o -> (1/o, -1/o^2),           "V_target(:min)") :
+                    FOMTerm(:V, :penalty, _sq_penalty(float(spec), w), "V_target($(float(spec)); w=$w)")
 
 function evaluate_fom(terms, ovals)
-    vs    = [t.g(ovals[t.observable]) for t in terms]
-    vals  = first.(vs)
-    J     = -prod(vals)
     dJ_do = Dict{Symbol,Float64}()
-    for (i, t) in enumerate(terms)
-        others = prod(vals[j] for j in eachindex(vals) if j != i; init=1.0)
-        dJ_do[t.observable] = get(dJ_do, t.observable, 0.0) - vs[i][2] * others
+
+    mult = [t for t in terms if t.kind !== :penalty]
+    mv   = [t.g(ovals[t.observable]) for t in mult]
+    for (i, t) in enumerate(mult)
+        others = prod((first(mv[j]) for j in eachindex(mv) if j != i); init=1.0)
+        dJ_do[t.observable] = get(dJ_do, t.observable, 0.0) - mv[i][2] * others
+    end
+    J = isempty(mv) ? 0.0 : -prod(first.(mv))
+
+    for t in terms
+        t.kind === :penalty || continue
+        cost, dcost = t.g(ovals[t.observable])
+        J += cost
+        dJ_do[t.observable] = get(dJ_do, t.observable, 0.0) + dcost
     end
     return J, dJ_do
 end
@@ -131,6 +134,39 @@ function _select_mode(raw, λ_target, σ; Qfloor=30.0)
     argmax(score, cand)
 end
 
+_fmt_obs(s, v) = s === :λ ? @sprintf("%.6f", v) :
+                 s === :Q ? @sprintf("%.2f", v) :
+                            @sprintf("%.6g", v)
+
+function _open_log(save_data, seed, log_obs, meta)
+    save_data === false && return nothing, nothing
+    if save_data isa AbstractString && endswith(save_data, ".csv")
+        path = save_data; mkpath(dirname(path))
+    else
+        base = save_data isa AbstractString ? save_data :
+               (isempty(PROGRAM_FILE) ? pwd() : dirname(abspath(PROGRAM_FILE)))
+        path = joinpath(mkpath(joinpath(base, "results")),
+                        Dates.format(now(), "yymmdd-HHMMSS") * ".csv")
+    end
+    io = open(path, "w")
+    gh = try readchomp(`git rev-parse --short HEAD`) catch; "unknown" end
+    println(io, "# git=$gh")
+    for line in meta; println(io, "# ", line); end
+    println(io, "# seed=", seed)
+    println(io, "eval,elapsed_s,J,", join(string.(log_obs), ","),
+                ",", join(["p$i" for i in eachindex(seed)], ","))
+    flush(io)
+    return io, path
+end
+
+function _log_row(io, log_obs, n_eval, elapsed, J, ovals, x)
+    io === nothing && return
+    obs  = join((haskey(ovals, s) ? _fmt_obs(s, ovals[s]) : "NaN" for s in log_obs), ",")
+    pstr = join((@sprintf("%.6f", xi) for xi in x), ",")
+    @printf(io, "%d,%.1f,%.6f,%s,%s\n", n_eval, elapsed, J, obs, pstr)
+    flush(io)
+end
+
 function adj_opt(seed_design, FOMs;
                  substrates, nClad, nCBG, tCBG, slotted=false,
                  λ=0.780, lower=nothing, upper=nothing,
@@ -145,39 +181,15 @@ function adj_opt(seed_design, FOMs;
                                   slotted, λ, m, grid_kwargs)
 
     log_obs = unique([t.observable for t in FOMs])
-    logpath = nothing; logio = nothing
-    if save_data !== false
-        if save_data isa AbstractString && endswith(save_data, ".csv")
-            logpath = save_data
-            mkpath(dirname(logpath))
-        else
-            base = save_data isa AbstractString ? save_data :
-                   (isempty(PROGRAM_FILE) ? pwd() : dirname(abspath(PROGRAM_FILE)))
-            logpath = joinpath(mkpath(joinpath(base, "results")),
-                               Dates.format(now(), "yymmdd-HHMMSS") * ".csv")
-        end
-        logio   = open(logpath, "w")
-        gh = try readchomp(`git rev-parse --short HEAD`) catch; "unknown" end
-        println(logio, "# git=$gh")
-        println(logio, "# FOM: ", join([t.label for t in FOMs], " · "))
-        println(logio, "# seed=", seed_design)
-        println(logio, "eval,elapsed_s,J,", join(string.(log_obs), ","),
-                       ",", join(["p$i" for i in eachindex(seed_design)], ","))
-        flush(logio)
-    end
+    meta = ["cbg: nClad=$nClad  nCBG=$nCBG  tCBG=$tCBG",
+            "substrates: " * join(["(n=$(s.n), h=$(s.height))" for s in substrates], "  "),
+            "solve: grid_kwargs=$grid_kwargs  Nmodes=$Nmodes  m=$m",
+            "FOM: " * join([t.label for t in FOMs], " · ")]
+    logio, logpath = _open_log(save_data, seed_design, log_obs, meta)
 
     y_prev  = Ref{Union{Nothing,Vector{ComplexF64}}}(nothing)
     cache_x = Ref(Float64[]); cache = Ref{Any}(nothing); n_eval = Ref(0)
     t_start = time()
-
-    function logrow!(J, ovals)
-        logio === nothing && return
-        obs  = join((haskey(ovals, s) ? @sprintf("%.8g", ovals[s]) : "NaN" for s in log_obs), ",")
-        pstr = join((@sprintf("%.6f", xi) for xi in cache_x[]), ",")
-        @printf(logio, "%d,%.1f,%.6f,%s,%s\n",
-                n_eval[], time()-t_start, J, obs, pstr)
-        flush(logio)
-    end
 
     function evaluate(x)
         if cache_x[] != x
@@ -194,7 +206,7 @@ function adj_opt(seed_design, FOMs;
                     @printf("        raw %d: λ=%.1f nm  Q=%.1f\n", i, md.λ*1000, md.Q)
                 end
                 cache[] = (J = 1e3, ∇ = zeros(length(x)))
-                logrow!(1e3, Dict{Symbol,Float64}())
+                _log_row(logio, log_obs, n_eval[], time()-t_start, 1e3, Dict{Symbol,Float64}(), x)
             else
                 y0 = (y_prev[] !== nothing && length(y_prev[]) == length(rm.raw_E)) ?
                      y_prev[] : rm.raw_E
@@ -203,7 +215,7 @@ function adj_opt(seed_design, FOMs;
                 y_prev[] = y
                 cache[]  = (; J, ∇)
                 @printf("[%3d] J=%.4f  λ=%.2f nm  Q=%.1f\n", n_eval[], J, ob.λ*1000, ob.Q)
-                logrow!(J, Dict(:λ => ob.λ, :Q => ob.Q))
+                _log_row(logio, log_obs, n_eval[], time()-t_start, J, Dict(:λ => ob.λ, :Q => ob.Q), x)
             end
         end
         return cache[]
