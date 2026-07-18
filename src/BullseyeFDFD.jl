@@ -7,6 +7,7 @@ using Arpack
 using Printf
 using SpecialFunctions
 using Optim
+using Dates
 using LineSearches
 
 include("geometry.jl")     # Feature/Layer types + build_geometry, design ↔ params bridge
