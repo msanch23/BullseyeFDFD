@@ -27,7 +27,7 @@ export solve_sim, dipole
 export analyze_mode, report_modes, confinement_factor, analyze_driven, report_driven
 export plot_efield, plot_farfield, plot_kspace, plot_farfield_kspace
 export calc_farfield, calc_flux, calc_H_fields
-export adj_opt, λ_target, Q_target, FOMTerm
+export adj_opt, λ_target, Q_target, V_target, Fp_target, ηG_target, η_target, FOMTerm
 export BackTracking, HagerZhang
 
 end

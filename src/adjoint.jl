@@ -23,6 +23,14 @@ V_target(spec; w=1.0) =
     spec === :min ? FOMTerm(:V, :reward,  o -> (1/o, -1/o^2),           "V_target(:min)") :
                     FOMTerm(:V, :penalty, _sq_penalty(float(spec), w), "V_target($(float(spec)); w=$w)")
 
+ηG_target(spec; w=1.0) =
+    spec === :max ? FOMTerm(:ηG, :reward,  o -> (o, 1.0),               "ηG_target(:max)") :
+                    FOMTerm(:ηG, :penalty, _sq_penalty(float(spec), w), "ηG_target($(float(spec)); w=$w)")
+
+η_target(spec; w=1.0) =
+    spec === :max ? FOMTerm(:η, :reward,  o -> (o, 1.0),               "η_target(:max)") :
+                    FOMTerm(:η, :penalty, _sq_penalty(float(spec), w), "η_target($(float(spec)); w=$w)")
+
 function evaluate_fom(terms, ovals)
     dJ_do = Dict{Symbol,Float64}()
 
@@ -50,17 +58,31 @@ function _adjoint_setup(seed, substrates, nClad, nCBG, tCBG, slotted, λ, m, gri
     _, inv_μr = material_tensors(build_epsilon(geom0, grid), grid)
     M   = Ch * inv_μr * Ce
     εof = d -> build_epsilon(build_geometry(d, substrates, nClad, nCBG, tCBG; slotted), grid)
-    return grid, M, εof
+    return grid, M, εof, Ce
 end
 
-function _left_eigvec(A, k_sq, y0; steps=2)
-    F = lu(A - (k_sq + 1e-6)*I)
+_shifted_lu(A, k_sq) = lu(A - (k_sq + 1e-6)*I)
+
+function _left_eigvec(F, y0; steps=2)
     y = copy(y0)
     for _ in 1:steps
         y = F' \ y
         y ./= norm(y)
     end
     return y
+end
+
+function _adj_field(F, A, k_sq, ψ, φ, src; refine=5)
+    defl!(r) = (r .-= ψ .* (dot(ψ, r)/dot(ψ, ψ)); r)
+    rhs = defl!(Vector(conj.(src)))
+    M   = A' - conj(k_sq)*I
+    z   = F' \ ((abs(k_sq)/dot(φ, ψ)) .* ψ)
+    sm(r) = (w = F' \ r; w .- z .* (dot(φ, w)/(1 + dot(φ, z))))
+    v = defl!(sm(rhs))
+    for _ in 1:refine
+        v .+= defl!(sm(defl!(rhs .- M*v)))
+    end
+    return defl!(v)
 end
 
 function _zavgᵀ(d)
@@ -83,13 +105,15 @@ function _ρavgᵀ(d)
     return out
 end
 
-function _dk2_deps_grid(dk2_dinv, inv_ϵr, grid)
-    N = grid.N; d = diag(inv_ϵr)
-    dρρ = reshape(dk2_dinv[1:N]     .* .-(d[1:N].^2),     grid.Nρ, grid.Nz)
-    dϕϕ = reshape(dk2_dinv[N+1:2N]  .* .-(d[N+1:2N].^2),  grid.Nρ, grid.Nz)
-    dzz = reshape(dk2_dinv[2N+1:3N] .* .-(d[2N+1:3N].^2), grid.Nρ, grid.Nz)
+function _deps_grid(dtens, grid)
+    N = grid.N
+    dρρ = reshape(dtens[1:N],     grid.Nρ, grid.Nz)
+    dϕϕ = reshape(dtens[N+1:2N],  grid.Nρ, grid.Nz)
+    dzz = reshape(dtens[2N+1:3N], grid.Nρ, grid.Nz)
     return _zavgᵀ(dρρ) .+ _ρavgᵀ(dzz .+ _zavgᵀ(dϕϕ))
 end
+
+_dk2_deps_grid(dinv, inv_ϵr, grid) = _deps_grid(dinv .* .-(diag(inv_ϵr).^2), grid)
 
 function _dk2_dparams(design, grad_ε, εof; δ=1e-7)
     grad = zeros(ComplexF64, length(design))
@@ -101,20 +125,219 @@ function _dk2_dparams(design, grad_ε, εof; δ=1e-7)
     return grad
 end
 
-function _dk2_dp(design, mode, grid, A, inv_ϵr, M, εof, y0; δ=1e-7)
+function _dk2_dp(design, mode, grid, A, inv_ϵr, M, εof, F, y0; δ=1e-7)
     x = mode.raw_E
-    y = _left_eigvec(A, mode.k_sq, y0)
+    y = _left_eigvec(F, y0)
     b = M * x
     dk2_dinv = conj(y) .* b ./ dot(y, x)
     grad_ε   = _dk2_deps_grid(dk2_dinv, inv_ϵr, grid)
-    return _dk2_dparams(design, grad_ε, εof; δ=δ), y
+    return _dk2_dparams(design, grad_ε, εof; δ=δ), y, b
 end
 
-function _fom_and_grad(k_sq, dk2, terms)
+function _V_terms(mode, grid, ϵ, inv_ϵr)
+    W  = _energy_density(mode, grid, inv_ϵr)
+    ir = findlast(grid.ρd .<= grid.total_cbg_radius)
+    jb, jt = grid.idx_cbg_bot, grid.idx_cbg_top
+    ΔV  = [cell_dV(grid, i, j) for i in 1:grid.Nρ, j in 1:grid.Nz]
+    box = falses(grid.Nρ, grid.Nz); box[1:ir, jb:jt] .= true
+    Wmax  = maximum(@view W[1:ir, jb:jt])
+    istar = argmax(ifelse.(box, W, -Inf))
+    Vphys = sum(W .* ΔV .* box) / Wmax
+    n_cav = sqrt(maximum(real.(ϵ[1, jb:jt])))
+    Veff  = Vphys / (mode.λ/n_cav)^3
+    return (; ΔV, box, Wmax, istar, Vphys, Veff, n_cav)
+end
+
+function _dV_sources(mode, t, inv_ϵr, grid)
+    N = grid.N; d = diag(inv_ϵr)
+    εr = real.(reshape(1.0 ./ d[1:N],    grid.Nρ, grid.Nz))
+    εϕ = real.(reshape(1.0 ./ d[N+1:2N], grid.Nρ, grid.Nz))
+    εz = real.(reshape(1.0 ./ d[2N+1:3N],grid.Nρ, grid.Nz))
+    κ = t.box .* t.ΔV; κ[t.istar] -= t.Vphys; κ ./= t.Wmax
+    Eρ, Eϕ, Ez = mode.Eρ, mode.Eϕ, mode.Ez
+    sρ = εr .* conj.(Eρ) .* κ; sϕ = εϕ .* conj.(Eϕ) .* κ; sz = εz .* conj.(Ez) .* κ
+    sρ[1, :] .= (εr[1, :] .+ εϕ[1, :]) .* conj.(Eρ[1, :]) .* κ[1, :]
+    sϕ[1, :] .= 0; sz[1, :] .= 0
+    dρ = abs2.(Eρ) .* κ; dϕ = abs2.(Eϕ) .* κ; dz = abs2.(Ez) .* κ
+    dϕ[1, :] .= abs2.(Eρ[1, :]) .* κ[1, :]; dz[1, :] .= 0
+    return vcat(vec(sρ), vec(sϕ), vec(sz)), vcat(vec(dρ), vec(dϕ), vec(dz))
+end
+
+function _dV_dp(design, mode, grid, ϵ, inv_ϵr, εof, A, F, ψ, b, dk2; δ=1e-7)
+    x = mode.raw_E
+    t = _V_terms(mode, grid, ϵ, inv_ϵr)
+    src, dir = _dV_sources(mode, t, inv_ϵr, grid)
+    v   = _adj_field(F, A, mode.k_sq, ψ, x, src)
+    dAφ = _dk2_dparams(design, _dk2_deps_grid(conj(v) .* b, inv_ϵr, grid), εof; δ=δ)
+    dVp = 2 .* real.(dot(v, x) .* dk2 .- dAφ) .+
+          real.(_dk2_dparams(design, _deps_grid(dir, grid), εof; δ=δ))
+    k  = sqrt(mode.k_sq)
+    dλ = -2π/real(k)^2 .* real.(dk2 ./ (2k))
+    ∇V = dVp ./ (mode.λ/t.n_cav)^3 .- 3*t.Veff/mode.λ .* dλ
+    return ∇V, t.Veff
+end
+
+function _farfield_terms(mode, grid, Ce; NA, m=1, ff_z=nothing, res=1080)
+    N = grid.N; Z0 = 376.73; k0 = 2π/mode.λ
+    raw_H = (1im/Z0) .* (Ce*mode.raw_E) ./ k0
+    Hρ = reshape(raw_H[1:N], grid.Nρ, grid.Nz); Hϕ = reshape(raw_H[N+1:2N], grid.Nρ, grid.Nz)
+    z0 = something(ff_z, ((grid.Z-grid.PMLz_top)+grid.cbg_top)/2); iz = argmin(abs.(grid.zp .- z0))
+    avg(v) = 0.5 .* (v[1:end-1] .+ v[2:end])
+    Eρl = mode.Eρ[1:end-1, iz]; Eϕl = avg(mode.Eϕ[:, iz])
+    Hρl = avg(0.5 .* (Hρ[:, iz-1] .+ Hρ[:, iz])); Hϕl = (0.5 .* (Hϕ[:, iz-1] .+ Hϕ[:, iz]))[1:end-1]
+    nh = min(length(Eρl), grid.idx_PMLρ); ρ = grid.ρd[1:nh]
+    Eρs, Eϕs = Eρl[1:nh], Eϕl[1:nh]; Hρs, Hϕs = Hρl[1:nh], Hϕl[1:nh]
+    w = 0.5 .* (grid.ρp[2:nh+1].^2 .- grid.ρp[1:nh].^2)
+    θs = range(0, π/2, length=res); Δθ = θs[2]-θs[1]
+    Eθ = zeros(ComplexF64, res); Eϕf = zeros(ComplexF64, res)
+    for (j, θ) in enumerate(θs)
+        kρ = k0*sin(θ); cθ = cos(θ); ap = am = bp = bm = 0.0+0im
+        for i in 1:nh
+            Jp = besselj(m+1, kρ*ρ[i]); Jm = besselj(m-1, kρ*ρ[i]); wi = w[i]
+            bp += ( Eϕs[i]+1im*Eρs[i])*Jp*wi; bm += ( Eϕs[i]-1im*Eρs[i])*Jm*wi
+            ap += (-Hϕs[i]-1im*Hρs[i])*Jp*wi; am += (-Hϕs[i]+1im*Hρs[i])*Jm*wi
+        end
+        Eθ[j] = cθ*((bm-bp)+Z0*(am-ap)); Eϕf[j] = 1im*((bp+bm)+Z0*(ap+am))
+    end
+    I = abs2.(Eθ) .+ abs2.(Eϕf); sinθ = sin.(θs)
+    θw = asin(NA); G = exp.(-2.0 .* (θs./θw).^2); sqrtI = sqrt.(I)
+    S = sum(sqrtI.*G.*sinθ)*Δθ; P = sum(I.*sinθ)*Δθ; normG = sum(G.^2 .*sinθ)*Δθ
+    ηG = S^2/(P*normG)
+    Pθ = cumsum(I.*sinθ).*Δθ; idxNA = findfirst(θs .>= θw)
+    Ceff = idxNA === nothing ? 1.0 : Pθ[idxNA]/Pθ[end]
+    return (; θs, Δθ, sinθ, G, sqrtI, Eθ, Eϕf, S, P, normG, ηG, Ceff, idxNA, ρ, w, nh, iz, k0)
+end
+
+function _ff_backward(ft, grid, Ce, dI; m=1)
+    N = grid.N; Z0 = 376.73; k0 = ft.k0; nh = ft.nh; iz = ft.iz; ρ = ft.ρ; w = ft.w
+    dEθ = dI .* conj.(ft.Eθ); dEϕ = dI .* conj.(ft.Eϕf)
+    dEρs = zeros(ComplexF64,nh); dEϕs = zeros(ComplexF64,nh)
+    dHρs = zeros(ComplexF64,nh); dHϕs = zeros(ComplexF64,nh)
+    for (j, θ) in enumerate(ft.θs)
+        kρ = k0*sin(θ); cθ = cos(θ); gθ = dEθ[j]; gϕ = dEϕ[j]
+        dbm = gθ*cθ+gϕ*1im; dbp = -gθ*cθ+gϕ*1im; dam = gθ*cθ*Z0+gϕ*1im*Z0; dap = -gθ*cθ*Z0+gϕ*1im*Z0
+        for i in 1:nh
+            Jp = besselj(m+1, kρ*ρ[i]); Jm = besselj(m-1, kρ*ρ[i]); wi = w[i]
+            dEϕs[i] += dbp*Jp*wi + dbm*Jm*wi
+            dEρs[i] += dbp*1im*Jp*wi + dbm*(-1im)*Jm*wi
+            dHϕs[i] += dap*(-1.0)*Jp*wi + dam*(-1.0)*Jm*wi
+            dHρs[i] += dap*(-1im)*Jp*wi + dam*(1im)*Jm*wi
+        end
+    end
+    dEρ = zeros(ComplexF64,grid.Nρ,grid.Nz); dEϕ = zeros(ComplexF64,grid.Nρ,grid.Nz)
+    dHρ = zeros(ComplexF64,grid.Nρ,grid.Nz); dHϕ = zeros(ComplexF64,grid.Nρ,grid.Nz)
+    for i in 1:nh
+        dEρ[i,iz] += dEρs[i]; dEϕ[i,iz] += 0.5*dEϕs[i]; dEϕ[i+1,iz] += 0.5*dEϕs[i]
+        dHρ[i,iz-1] += 0.25*dHρs[i]; dHρ[i,iz] += 0.25*dHρs[i]
+        dHρ[i+1,iz-1] += 0.25*dHρs[i]; dHρ[i+1,iz] += 0.25*dHρs[i]
+        dHϕ[i,iz-1] += 0.5*dHϕs[i]; dHϕ[i,iz] += 0.5*dHϕs[i]
+    end
+    dH = zeros(ComplexF64,3N); dH[1:N] .= vec(dHρ); dH[N+1:2N] .= vec(dHϕ)
+    dφE = zeros(ComplexF64,3N); dφE[1:N] .= vec(dEρ); dφE[N+1:2N] .= vec(dEϕ)
+    return dφE .+ (1im/(Z0*k0)) .* (transpose(Ce)*dH)
+end
+
+function _flux_terms(mode, grid, Ce)
+    N = grid.N; Z0 = 376.73; k0 = 2π/mode.λ
+    raw_H = (1im/Z0) .* (Ce*mode.raw_E) ./ k0
+    Hρ = reshape(raw_H[1:N],grid.Nρ,grid.Nz); Hϕ = reshape(raw_H[N+1:2N],grid.Nρ,grid.Nz)
+    Hz = reshape(raw_H[2N+1:3N],grid.Nρ,grid.Nz)
+    Eρ, Eϕ, Ez = mode.Eρ, mode.Eϕ, mode.Ez
+    mon = default_monitors(grid)
+    itop = argmin(abs.(grid.zp .- mon.top)); iρ = argmin(abs.(grid.ρd .- mon.right))
+    ibot = argmin(abs.(grid.zp .- mon.bot)); max_r = iρ-1; avg(v) = 0.5 .* (v[1:end-1] .+ v[2:end])
+    function vflux(z)
+        Eρl = Eρ[1:max_r,z]; Eϕl = avg(Eϕ[1:max_r+1,z])
+        Hϕl = 0.5 .* (Hϕ[1:max_r,z-1] .+ Hϕ[1:max_r,z]); Hρl = avg(0.5 .* (Hρ[:,z-1] .+ Hρ[:,z])[1:max_r+1])
+        Sz = 0.5 .* real.(Eρl.*conj.(Hϕl) .- Eϕl.*conj.(Hρl))
+        s = 0.0; for i in 1:max_r; s += Sz[i]*2π*grid.ρd[i]*grid.Δρd[i]; end; s
+    end
+    P_top = vflux(itop); P_bot = vflux(ibot); R_wall = grid.ρp[iρ]; P_ρ = 0.0
+    for z in ibot:itop
+        zn = min(grid.Nz,z+1); Ez_v = Ez[iρ,z]; Eϕ_v = 0.5*(Eϕ[iρ,z]+Eϕ[iρ,zn])
+        Hz_v = 0.25*(Hz[iρ-1,z]+Hz[iρ,z]+Hz[iρ-1,zn]+Hz[iρ,zn]); Hϕ_v = 0.5*(Hϕ[iρ-1,z]+Hϕ[iρ,z])
+        P_ρ += 0.5*real(Eϕ_v*conj(Hz_v)-Ez_v*conj(Hϕ_v)) * grid.Δzd[z]*2π*R_wall
+    end
+    P_total = P_top-P_bot+P_ρ
+    return (; P_top, P_bot, P_ρ, P_total, top_frac=P_top/P_total,
+              itop, ibot, iρ, max_r, R_wall, k0, Eρ, Eϕ, Ez, Hρ, Hϕ, Hz)
+end
+
+function _dtopfrac_de(fx, grid, Ce)
+    N = grid.N; Z0 = 376.73; k0 = fx.k0; tf = fx.top_frac; Pt = fx.P_total
+    max_r = fx.max_r; iρ = fx.iρ; avg(v) = 0.5 .* (v[1:end-1] .+ v[2:end])
+    dEρ = zeros(ComplexF64,grid.Nρ,grid.Nz); dEϕ = zeros(ComplexF64,grid.Nρ,grid.Nz); dEz = zeros(ComplexF64,grid.Nρ,grid.Nz)
+    dHρ = zeros(ComplexF64,grid.Nρ,grid.Nz); dHϕ = zeros(ComplexF64,grid.Nρ,grid.Nz); dHz = zeros(ComplexF64,grid.Nρ,grid.Nz)
+    for (z, dfdP) in ((fx.itop, (1-tf)/Pt), (fx.ibot, tf/Pt))
+        Eρl = fx.Eρ[1:max_r,z]; Eϕl = avg(fx.Eϕ[1:max_r+1,z])
+        Hϕl = 0.5 .* (fx.Hϕ[1:max_r,z-1] .+ fx.Hϕ[1:max_r,z]); Hρl = avg(0.5 .* (fx.Hρ[:,z-1] .+ fx.Hρ[:,z])[1:max_r+1])
+        for i in 1:max_r
+            coeff = dfdP*2π*grid.ρd[i]*grid.Δρd[i]
+            dEρv = 0.25*conj(Hϕl[i])*coeff; dEϕv = -0.25*conj(Hρl[i])*coeff
+            dHϕv = 0.25*conj(Eρl[i])*coeff; dHρv = -0.25*conj(Eϕl[i])*coeff
+            dEρ[i,z] += dEρv; dEϕ[i,z] += 0.5*dEϕv; dEϕ[i+1,z] += 0.5*dEϕv
+            dHϕ[i,z-1] += 0.5*dHϕv; dHϕ[i,z] += 0.5*dHϕv
+            dHρ[i,z-1] += 0.25*dHρv; dHρ[i,z] += 0.25*dHρv; dHρ[i+1,z-1] += 0.25*dHρv; dHρ[i+1,z] += 0.25*dHρv
+        end
+    end
+    for z in fx.ibot:fx.itop
+        zn = min(grid.Nz,z+1); coeff = (-tf/Pt)*grid.Δzd[z]*2π*fx.R_wall
+        Eϕ_v = 0.5*(fx.Eϕ[iρ,z]+fx.Eϕ[iρ,zn]); Ez_v = fx.Ez[iρ,z]
+        Hz_v = 0.25*(fx.Hz[iρ-1,z]+fx.Hz[iρ,z]+fx.Hz[iρ-1,zn]+fx.Hz[iρ,zn]); Hϕ_v = 0.5*(fx.Hϕ[iρ-1,z]+fx.Hϕ[iρ,z])
+        dEϕv = 0.25*conj(Hz_v)*coeff; dEzv = -0.25*conj(Hϕ_v)*coeff
+        dHzv = 0.25*conj(Eϕ_v)*coeff; dHϕv = -0.25*conj(Ez_v)*coeff
+        dEϕ[iρ,z] += 0.5*dEϕv; dEϕ[iρ,zn] += 0.5*dEϕv; dEz[iρ,z] += dEzv
+        dHz[iρ-1,z] += 0.25*dHzv; dHz[iρ,z] += 0.25*dHzv; dHz[iρ-1,zn] += 0.25*dHzv; dHz[iρ,zn] += 0.25*dHzv
+        dHϕ[iρ-1,z] += 0.5*dHϕv; dHϕ[iρ,z] += 0.5*dHϕv
+    end
+    dH = zeros(ComplexF64,3N); dH[1:N] .= vec(dHρ); dH[N+1:2N] .= vec(dHϕ); dH[2N+1:3N] .= vec(dHz)
+    dφE = zeros(ComplexF64,3N); dφE[1:N] .= vec(dEρ); dφE[N+1:2N] .= vec(dEϕ); dφE[2N+1:3N] .= vec(dEz)
+    return dφE .+ (1im/(Z0*k0)) .* (transpose(Ce)*dH)
+end
+
+function _field_grad(design, x, k_sq, grid, inv_ϵr, εof, A, F, ψ, b, dk2, src, gλ; δ=1e-7)
+    v   = _adj_field(F, A, k_sq, ψ, x, src)
+    dAφ = _dk2_dparams(design, _dk2_deps_grid(conj(v) .* b, inv_ϵr, grid), εof; δ=δ)
+    eig = 2 .* real.(dot(v, x) .* dk2 .- dAφ)
+    k   = sqrt(k_sq); dλ = -2π/real(k)^2 .* real.(dk2 ./ (2k))
+    return eig .+ gλ .* dλ
+end
+
+function _dηG_dp(design, mode, grid, inv_ϵr, εof, A, F, ψ, b, dk2, Ce; NA, δ=1e-7, δλ=1e-7)
+    ft  = _farfield_terms(mode, grid, Ce; NA)
+    dI  = (ft.sinθ .* ft.Δθ ./ ft.P) .* (ft.S .* ft.G ./ ((ft.sqrtI .+ 1e-30) .* ft.normG) .- ft.ηG)
+    gλ  = (_farfield_terms((; mode..., λ=mode.λ+δλ), grid, Ce; NA).ηG -
+           _farfield_terms((; mode..., λ=mode.λ-δλ), grid, Ce; NA).ηG) / (2δλ)
+    ∇ηG = _field_grad(design, mode.raw_E, mode.k_sq, grid, inv_ϵr, εof, A, F, ψ, b, dk2,
+                      _ff_backward(ft, grid, Ce, dI), gλ; δ=δ)
+    return ∇ηG, ft.ηG
+end
+
+function _dη_dp(design, mode, grid, inv_ϵr, εof, A, F, ψ, b, dk2, Ce; NA, δ=1e-7, δλ=1e-7)
+    ft = _farfield_terms(mode, grid, Ce; NA); fx = _flux_terms(mode, grid, Ce)
+    Ceff = ft.Ceff; tf = fx.top_frac
+    dCeff_dI = (ft.Δθ ./ ft.P) .* (((1:length(ft.θs)) .<= ft.idxNA) .- Ceff) .* ft.sinθ
+    src = tf .* _ff_backward(ft, grid, Ce, dCeff_dI) .+ Ceff .* _dtopfrac_de(fx, grid, Ce)
+    dCeff_dλ = (_farfield_terms((; mode..., λ=mode.λ+δλ), grid, Ce; NA).Ceff -
+                _farfield_terms((; mode..., λ=mode.λ-δλ), grid, Ce; NA).Ceff) / (2δλ)
+    ∇η = _field_grad(design, mode.raw_E, mode.k_sq, grid, inv_ϵr, εof, A, F, ψ, b, dk2,
+                     src, tf*dCeff_dλ; δ=δ)
+    return ∇η, Ceff*tf
+end
+
+function _fom_and_grad(k_sq, dk2, terms; fields=Dict{Symbol,Tuple{Float64,Vector{Float64}}}())
     k = sqrt(k_sq); kr = real(k); ki = imag(k); sgn = sign(ki)
     λ = 2π/kr; Q = kr/(2abs(ki))
 
-    J, dJ_do = evaluate_fom(terms, Dict(:λ => λ, :Q => Q))   # add :V/:Fp values here later
+    ovals = Dict{Symbol,Float64}(:λ => λ, :Q => Q)
+    for (s, (val, _)) in fields; ovals[s] = val; end
+    haskey(ovals, :V) && (ovals[:Fp] = (3/(4π^2)) * Q / ovals[:V])
+    J, dJ_do = evaluate_fom(terms, ovals)
+
+    if haskey(dJ_do, :Fp)
+        dJ_do[:Q] = get(dJ_do, :Q, 0.0) + dJ_do[:Fp] * (3/(4π^2)) / ovals[:V]
+        dJ_do[:V] = get(dJ_do, :V, 0.0) - dJ_do[:Fp] * (3/(4π^2)) * Q / ovals[:V]^2
+    end
 
     ∇ = zeros(Float64, length(dk2))
     for i in eachindex(dk2)
@@ -123,8 +346,11 @@ function _fom_and_grad(k_sq, dk2, terms)
         dQ = dkr/(2abs(ki)) - Q/abs(ki)*sgn*dki
         ∇[i] = get(dJ_do, :λ, 0.0)*dλ + get(dJ_do, :Q, 0.0)*dQ
     end
-    # field observables later:  haskey(dJ_do,:V) && (∇ .+= dJ_do[:V] .* ∇V)
-    return J, ∇, (; λ, Q)
+    for (s, (_, ∇field)) in fields
+        c = get(dJ_do, s, 0.0)
+        c == 0.0 || (∇ .+= c .* ∇field)
+    end
+    return J, ∇, ovals
 end
 
 function _select_mode(raw, λ_target, σ; Qfloor=30.0)
@@ -169,18 +395,23 @@ end
 
 function adj_opt(seed_design, FOMs;
                  substrates, nClad, nCBG, tCBG, slotted=false,
-                 λ=0.780, lower=nothing, upper=nothing,
+                 λ=0.780, NA=nothing, lower=nothing, upper=nothing,
                  Nmodes=5, m=1, grid_kwargs=(;),
                  σ_sel=0.020, Qfloor=30.0, save_data=false,
-                 iterations=100, linesearch=BackTracking(),
-                 options=Optim.Options(; iterations, outer_iterations=5,
+                 iterations=50, linesearch=BackTracking(),
+                 options=Optim.Options(; iterations, outer_iterations=10,
                                          x_abstol=1e-3, f_reltol=1e-4,
                                          show_trace=true))
 
-    grid, M, εof = _adjoint_setup(seed_design, substrates, nClad, nCBG, tCBG,
-                                  slotted, λ, m, grid_kwargs)
+    grid, M, εof, Ce = _adjoint_setup(seed_design, substrates, nClad, nCBG, tCBG,
+                                      slotted, λ, m, grid_kwargs)
 
-    log_obs = unique([t.observable for t in FOMs])
+    log_obs  = unique([t.observable for t in FOMs])
+    needs_V  = any(t.observable in (:V, :Fp) for t in FOMs)
+    needs_ηG = any(t.observable === :ηG for t in FOMs)
+    needs_η  = any(t.observable === :η  for t in FOMs)
+    (needs_ηG || needs_η) && NA === nothing &&
+        error("η/ηG figures of merit require an NA (pass NA=… to adj_opt)")
     meta = ["cbg: nClad=$nClad  nCBG=$nCBG  tCBG=$tCBG",
             "substrates: " * join(["(n=$(s.n), h=$(s.height))" for s in substrates], "  "),
             "solve: grid_kwargs=$grid_kwargs  Nmodes=$Nmodes  m=$m",
@@ -210,12 +441,27 @@ function adj_opt(seed_design, FOMs;
             else
                 y0 = (y_prev[] !== nothing && length(y_prev[]) == length(rm.raw_E)) ?
                      y_prev[] : rm.raw_E
-                dk2, y = _dk2_dp(x, rm, grid, A, inv_ϵr, M, εof, y0; δ=1e-7)
-                J, ∇, ob = _fom_and_grad(rm.k_sq, dk2, FOMs)
+                F = _shifted_lu(A, rm.k_sq)
+                dk2, y, b = _dk2_dp(x, rm, grid, A, inv_ϵr, M, εof, F, y0; δ=1e-7)
+                fields = Dict{Symbol,Tuple{Float64,Vector{Float64}}}()
+                if needs_V
+                    ∇V, Veff = _dV_dp(x, rm, grid, ϵ, inv_ϵr, εof, A, F, y, b, dk2; δ=1e-7)
+                    fields[:V] = (Veff, ∇V)
+                end
+                if needs_ηG
+                    ∇ηG, ηGv = _dηG_dp(x, rm, grid, inv_ϵr, εof, A, F, y, b, dk2, Ce; NA)
+                    fields[:ηG] = (ηGv, ∇ηG)
+                end
+                if needs_η
+                    ∇η, ηv = _dη_dp(x, rm, grid, inv_ϵr, εof, A, F, y, b, dk2, Ce; NA)
+                    fields[:η] = (ηv, ∇η)
+                end
+                J, ∇, ob = _fom_and_grad(rm.k_sq, dk2, FOMs; fields)
                 y_prev[] = y
                 cache[]  = (; J, ∇)
-                @printf("[%3d] J=%.4f  λ=%.2f nm  Q=%.1f\n", n_eval[], J, ob.λ*1000, ob.Q)
-                _log_row(logio, log_obs, n_eval[], time()-t_start, J, Dict(:λ => ob.λ, :Q => ob.Q), x)
+                @printf("[%3d] J=%.4f  λ=%.2f nm  Q=%.1f%s\n", n_eval[], J, ob[:λ]*1000,
+                        ob[:Q], haskey(ob, :V) ? @sprintf("  V=%.4f", ob[:V]) : "")
+                _log_row(logio, log_obs, n_eval[], time()-t_start, J, ob, x)
             end
         end
         return cache[]

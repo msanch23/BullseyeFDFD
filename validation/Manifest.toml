@@ -107,10 +107,10 @@ uuid = "d1d4a3ce-64b1-5f1a-9ba4-7e7e69966f35"
 version = "0.1.10"
 
 [[deps.BullseyeFDFD]]
-deps = ["Arpack", "LinearAlgebra", "Optim", "Plots", "Printf", "SparseArrays", "SpecialFunctions"]
+deps = ["Arpack", "Dates", "LineSearches", "LinearAlgebra", "Optim", "Plots", "Printf", "SparseArrays", "SpecialFunctions"]
 path = ".."
 uuid = "830c5485-98b4-4259-909c-01fc509337e2"
-version = "0.1.0"
+version = "0.5.0"
 
 [[deps.Bzip2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
