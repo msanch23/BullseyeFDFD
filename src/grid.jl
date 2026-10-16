@@ -87,7 +87,7 @@ function stretch_grid(L, Δ, stretch_ratio, max_stretch_Δ)
 end;
 
 function conformal_grid(geometry, λ;
-                        λPts=20, geoPts=16,
+                        λPts=24, geoPts=16,
                         PMLρ=0.5, PMLz_bot=0.5, PMLz_top=0.5,
                         padρ = 0.5, padz_bot = 0.5, padz_top = 0.5,
                         stretch_ratio_Δρ = 1.15, stretch_ratio_Δz_bot = 1.15, stretch_ratio_Δz_top = 1.15,
