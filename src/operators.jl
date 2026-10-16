@@ -8,8 +8,17 @@ function s_vectors(grid::CylindricalGrid, λ; p=3.5, R_target=1e-12)
         return 1.0 - (σ * λ / (2π)) * im
     end
 
+    # ∫₀ᵘ (S - 1) du′: offset of the stretched coordinate ρ̃ = ∫₀^ρ S dρ′ from ρ
+    function calc_∫S(u, L, σ_max)
+        if L <= 0 || u <= 0; return 0.0 + 0im; end
+        d = u / L
+        return -(σ_max * L * d^(p + 1) / (p + 1) * λ / (2π)) * im
+    end
+
     Sρp = ones(ComplexF64, grid.Nρ)
     Sρd = ones(ComplexF64, grid.Nρ)
+    ρ̃p = ComplexF64.(grid.ρp[1:end-1])
+    ρ̃d = ComplexF64.(grid.ρd)
 
     if grid.PMLρ > 0
         σ_max_ρ = calc_σ_max(grid.PMLρ)
@@ -17,9 +26,11 @@ function s_vectors(grid::CylindricalGrid, λ; p=3.5, R_target=1e-12)
         for i in 1:grid.Nρ
             if grid.ρp[i] > ρ_start
                 Sρp[i] = calc_S(grid.ρp[i] - ρ_start, grid.PMLρ, σ_max_ρ)
+                ρ̃p[i] += calc_∫S(grid.ρp[i] - ρ_start, grid.PMLρ, σ_max_ρ)
             end
             if grid.ρd[i] > ρ_start
                 Sρd[i] = calc_S(grid.ρd[i] - ρ_start, grid.PMLρ, σ_max_ρ)
+                ρ̃d[i] += calc_∫S(grid.ρd[i] - ρ_start, grid.PMLρ, σ_max_ρ)
             end
         end
     end
@@ -53,11 +64,11 @@ function s_vectors(grid::CylindricalGrid, λ; p=3.5, R_target=1e-12)
         end
     end
 
-    return Sρp, Sρd, Szp, Szd
+    return Sρp, Sρd, Szp, Szd, ρ̃p, ρ̃d
 end;
 
 function CeChOperators(grid::CylindricalGrid, λ; m=1, pml_kwargs...)
-    Sρp, Sρd, Szp, Szd = s_vectors(grid, λ; pml_kwargs...)
+    Sρp, Sρd, Szp, Szd, ρ̃p, ρ̃d = s_vectors(grid, λ; pml_kwargs...)
 
     inv_Δzp = 1.0 ./ (grid.Δzp .* Szd)
     Dz_E = spdiagm(0 => -inv_Δzp, 1 => inv_Δzp[1:end-1])
@@ -81,9 +92,10 @@ function CeChOperators(grid::CylindricalGrid, λ; m=1, pml_kwargs...)
     Dρ_E_2D = kron(Iz, Dρ_E)
     Dρ_H_2D = kron(Iz, Dρ_H)
 
-    ρp_vec = grid.ρp[1:end-1]
-    ρd_vec = grid.ρd
-    inv_ρp_vec = [r == 0 ? 0.0 : 1.0/r for r in ρp_vec]
+    # every explicit ρ in the curl is the stretched ρ̃ (≡ ρ outside the radial PML)
+    ρp_vec = ρ̃p
+    ρd_vec = ρ̃d
+    inv_ρp_vec = [iszero(r) ? zero(r) : inv(r) for r in ρp_vec]
     inv_ρd_vec = 1.0 ./ ρd_vec
 
     ρp_2D     = kron(Iz, spdiagm(0 => ρp_vec))

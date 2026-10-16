@@ -274,6 +274,43 @@ const grid = conformal_grid(geom, λ; gridkw...)
         @test all(!iszero, d[setdiff(1:N, axis)])   # nonzero everywhere off-axis
     end
 
+    # Radial PML: ρ → ρ̃ = ∫₀^ρ S dρ′ stretches the derivatives AND every explicit ρ.
+    @testset "s_vectors — stretched coordinate ρ̃" begin
+        p, R_target = 3.5, 1e-12
+        _, _, _, _, ρ̃p, ρ̃d = BullseyeFDFD.s_vectors(gpml, λ; p, R_target)
+        ρ_start = gpml.R - gpml.PMLρ
+        ρp = gpml.ρp[1:end-1]
+        @test ρ̃p[ρp .<= ρ_start] == ρp[ρp .<= ρ_start]               # ρ̃ ≡ ρ outside the layer
+        @test ρ̃d[gpml.ρd .<= ρ_start] == gpml.ρd[gpml.ρd .<= ρ_start]
+        L, u = gpml.PMLρ, gpml.ρd[end] - ρ_start                      # closed form at the last node
+        σ_max = -(p + 1) * log(R_target) / (2L)
+        @test ρ̃d[end] ≈ gpml.ρd[end] - im * (σ_max * λ / 2π) * L / (p + 1) * (u / L)^(p + 1)
+        _, _, _, _, ρ̃p0, ρ̃d0 = BullseyeFDFD.s_vectors(g0, λ)
+        @test ρ̃p0 == g0.ρp[1:end-1] && ρ̃d0 == g0.ρd                  # PMLρ = 0 ⇒ ρ̃ = ρ
+
+        # dρ̃/dρ = S: ρ̃ and the derivative stretch describe the same coordinate
+        _, Sρd, _, _, ρ̃pf, _ = BullseyeFDFD.s_vectors(grid, λ)
+        i = findall(grid.ρp[2:end-1] .> grid.R - grid.PMLρ)
+        @test all(isapprox.(diff(ρ̃pf)[i] ./ grid.Δρp[i], Sρd[i]; rtol = 1e-2))
+    end
+
+    @testset "CeChOperators — PML metric uses ρ̃" begin
+        Ce, Ch = CeChOperators(gpml, λ; m = 1)
+        N, Nρ, Nz = gpml.N, gpml.Nρ, gpml.Nz
+        _, _, _, _, ρ̃p, ρ̃d = BullseyeFDFD.s_vectors(gpml, λ)
+        inpml = repeat(gpml.ρp[1:end-1] .> gpml.R - gpml.PMLρ, Nz)
+        d = diag(Ce[1:N, 2N+1:3N])                  # (1,3) block = -im·m/ρ̃p: real part only in the PML
+        @test all(!iszero, real.(d[inpml])) && all(iszero, real.(d[.!inpml]))
+
+        # ρ̃Eϕ = const ⇒ ρ̃⁻¹∂ρ(ρ̃Eϕ) = 0 on interior rows, PML included (inner AND outer ρ̃)
+        e = [i == 1 ? 0.0im : 1 / ρ̃p[i] for j in 1:Nz for i in 1:Nρ]
+        r = Ce[2N+1:3N, N+1:2N] * e                 # (3,2) block = Dρ_ρE
+        @test all(x -> abs(x) < 1e-8, r[[(j-1)*Nρ + i for j in 1:Nz for i in 2:Nρ-1]])
+        h = [1 / ρ̃d[i] for j in 1:Nz for i in 1:Nρ]
+        r = Ch[2N+1:3N, N+1:2N] * h                 # (3,2) block = Dρ_ρH
+        @test all(x -> abs(x) < 1e-8, r[[(j-1)*Nρ + i for j in 1:Nz for i in 2:Nρ]])
+    end
+
     # -- materials: Yee-staggered inverse tensors --------------------------
     @testset "material_tensors" begin
         invϵ, invμ = BullseyeFDFD.material_tensors(ε_ref, grid)
