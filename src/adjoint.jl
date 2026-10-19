@@ -51,13 +51,35 @@ function evaluate_fom(terms, ovals)
     return J, dJ_do
 end
 
-function _adjoint_setup(seed, substrates, nClad, nCBG, tCBG, slotted, λ, m, grid_kwargs)
-    geom0  = build_geometry(seed, substrates, nClad, nCBG, tCBG; slotted)
+function _thickness_spec(thickness, substrates)
+    map(collect(keys(thickness))) do s
+        s === :tCBG && return (s, 0)
+        r = match(r"^substrate(\d+)$", string(s))
+        i = r === nothing ? 0 : parse(Int, r[1])
+        1 <= i < length(substrates) ||
+            error("thickness: :$s is not :tCBG or a finite :substrateN (N < $(length(substrates)))")
+        (s, i)
+    end
+end
+
+function _unpack(p, nw, tspec, substrates, tCBG)
+    subs = collect(substrates); tc = tCBG
+    for (k, (s, i)) in enumerate(tspec)
+        s === :tCBG ? (tc = p[nw+k]) : (subs[i] = (; subs[i]..., height = p[nw+k]))
+    end
+    return p[1:nw], subs, tc
+end
+
+function _adjoint_setup(seed, substrates, nClad, nCBG, tCBG, slotted, λ, m, grid_kwargs; tspec=())
+    nw     = length(seed) - length(tspec)
+    geomof = p -> ((w, subs, tc) = _unpack(p, nw, tspec, substrates, tCBG);
+                   build_geometry(w, subs, nClad, nCBG, tc; slotted))
+    geom0  = geomof(seed)
     grid   = conformal_grid(geom0, λ; grid_kwargs...)
     Ce, Ch = CeChOperators(grid, λ; m=m)
     _, inv_μr = material_tensors(build_epsilon(geom0, grid), grid)
     M   = Ch * inv_μr * Ce
-    εof = d -> build_epsilon(build_geometry(d, substrates, nClad, nCBG, tCBG; slotted), grid)
+    εof = p -> build_epsilon(geomof(p), grid)
     return grid, M, εof, Ce, _reciprocity_weight(grid, λ; m)
 end
 
@@ -144,16 +166,17 @@ function _dk2_dp(design, mode, grid, A, inv_ϵr, M, εof, W; δ=1e-7)
     return _dk2_dparams(design, grad_ε, εof; δ=δ), y, b
 end
 
-function _V_terms(mode, grid, ϵ, inv_ϵr)
+function _V_terms(mode, grid, ϵ, inv_ϵr; top=grid.cbg_top)
     W  = _energy_density(mode, grid, inv_ϵr)
     ir = findlast(grid.ρd .<= grid.total_cbg_radius)
-    jb, jt = grid.idx_cbg_bot, grid.idx_cbg_top
+    fz = [clamp((min(grid.zp[j+1], top) - max(grid.zp[j], grid.cbg_bot)) / grid.Δzp[j], 0.0, 1.0)
+          for j in 1:grid.Nz]
+    fz[fz .< 1e-9] .= 0.0
     ΔV  = [cell_dV(grid, i, j) for i in 1:grid.Nρ, j in 1:grid.Nz]
-    box = falses(grid.Nρ, grid.Nz); box[1:ir, jb:jt] .= true
-    Wmax  = maximum(@view W[1:ir, jb:jt])
-    istar = argmax(ifelse.(box, W, -Inf))
+    box = ((1:grid.Nρ) .<= ir) .* transpose(fz)
+    Wmax, istar = findmax(ifelse.(box .> 0, W, -Inf))
     Vphys = sum(W .* ΔV .* box) / Wmax
-    n_cav = sqrt(maximum(real.(ϵ[1, jb:jt])))
+    n_cav = sqrt(maximum(real.(ϵ[1, fz .> 0])))
     Veff  = Vphys / (mode.λ/n_cav)^3
     return (; ΔV, box, Wmax, istar, Vphys, Veff, n_cav)
 end
@@ -173,14 +196,17 @@ function _dV_sources(mode, t, inv_ϵr, grid)
     return vcat(vec(sρ), vec(sϕ), vec(sz)), vcat(vec(dρ), vec(dϕ), vec(dz))
 end
 
-function _dV_dp(design, mode, grid, ϵ, inv_ϵr, εof, A, F, ψ, b, dk2; δ=1e-7)
+function _dV_dp(design, mode, grid, ϵ, inv_ϵr, εof, A, F, ψ, b, dk2; δ=1e-7,
+                top=grid.cbg_top, it=nothing)
     x = mode.raw_E
-    t = _V_terms(mode, grid, ϵ, inv_ϵr)
+    t = _V_terms(mode, grid, ϵ, inv_ϵr; top)
     src, dir = _dV_sources(mode, t, inv_ϵr, grid)
     v   = _adj_field(F, A, mode.k_sq, ψ, x, src)
     dAφ = _dk2_dparams(design, _dk2_deps_grid(conj(v) .* b, inv_ϵr, grid), εof; δ=δ)
     dVp = 2 .* real.(dot(v, x) .* dk2 .- dAφ) .+
           real.(_dk2_dparams(design, _deps_grid(dir, grid), εof; δ=δ))
+    it === nothing || (dVp[it] += (_V_terms(mode, grid, ϵ, inv_ϵr; top=top+δ).Vphys -
+                                   _V_terms(mode, grid, ϵ, inv_ϵr; top=top-δ).Vphys) / 2δ)
     k  = sqrt(mode.k_sq)
     dλ = -2π/real(k)^2 .* real.(dk2 ./ (2k))
     ∇V = dVp ./ (mode.λ/t.n_cav)^3 .- 3*t.Veff/mode.λ .* dλ
@@ -374,7 +400,7 @@ _fmt_obs(s, v) = s === :λ ? @sprintf("%.6f", v) :
                  s === :Q ? @sprintf("%.2f", v) :
                             @sprintf("%.6g", v)
 
-function _open_log(save_data, seed, log_obs, meta)
+function _open_log(save_data, seed, cols, log_obs, meta)
     save_data === false && return nothing, nothing
     if save_data isa AbstractString && endswith(save_data, ".csv")
         path = save_data; mkpath(dirname(path))
@@ -389,8 +415,7 @@ function _open_log(save_data, seed, log_obs, meta)
     println(io, "# git=$gh")
     for line in meta; println(io, "# ", line); end
     println(io, "# seed=", seed)
-    println(io, "eval,elapsed_s,J,", join(string.(log_obs), ","),
-                ",", join(["p$i" for i in eachindex(seed)], ","))
+    println(io, "eval,elapsed_s,J,", join(string.(log_obs), ","), ",", join(cols, ","))
     flush(io)
     return io, path
 end
@@ -404,7 +429,7 @@ function _log_row(io, log_obs, n_eval, elapsed, J, ovals, x)
 end
 
 function adj_opt(seed_design, FOMs;
-                 substrates, nClad, nCBG, tCBG, slotted=false,
+                 substrates, nClad, nCBG, tCBG, slotted=false, thickness=(;),
                  λ=0.780, NA=nothing, lower=nothing, upper=nothing,
                  Nmodes=5, m=1, grid_kwargs=(;),
                  σ_sel=0.020, Qfloor=30.0, save_data=false,
@@ -413,8 +438,24 @@ function adj_opt(seed_design, FOMs;
                                          x_abstol=1e-3, f_reltol=1e-4,
                                          show_trace=true))
 
-    grid, M, εof, Ce, W = _adjoint_setup(seed_design, substrates, nClad, nCBG, tCBG,
-                                         slotted, λ, m, grid_kwargs)
+    tspec = _thickness_spec(thickness, substrates)
+    nw    = length(seed_design)
+    p0    = [seed_design; Float64[s === :tCBG ? tCBG : substrates[i].height for (s, i) in tspec]]
+    it    = (k = findfirst(s -> s[1] === :tCBG, tspec)) === nothing ? nothing : nw + k
+    if !isempty(tspec)
+        lower = [something(lower, fill(-Inf, nw)); Float64[first(b) for b in values(thickness)]]
+        upper = [something(upper, fill( Inf, nw)); Float64[last(b)  for b in values(thickness)]]
+    end
+
+    grid, M, εof, Ce, W = _adjoint_setup(p0, substrates, nClad, nCBG, tCBG,
+                                         slotted, λ, m, grid_kwargs; tspec)
+    if !isempty(tspec)
+        _, subs_hi, tc_hi = _unpack(upper, nw, tspec, substrates, tCBG)
+        grid.cbg_bot - sum(s.height for s in subs_hi[1:end-1]; init=0.0) > grid.PMLz_bot ||
+            error("thickness upper bounds push the substrate stack into the bottom PML of the seed grid")
+        grid.cbg_bot + tc_hi < default_monitors(grid).top ||
+            error("tCBG upper bound reaches the top flux/far-field plane of the seed grid")
+    end
 
     log_obs  = unique([t.observable for t in FOMs])
     needs_V  = any(t.observable in (:V, :Fp) for t in FOMs)
@@ -427,7 +468,9 @@ function adj_opt(seed_design, FOMs;
             "substrates: " * join(["(n=$(s.n), h=$(s.height))" for s in substrates], "  "),
             "solve: grid_kwargs=$grid_kwargs  Nmodes=$Nmodes  m=$m",
             "FOM: " * join([t.label for t in FOMs], " · ")]
-    logio, logpath = _open_log(save_data, seed_design, log_obs, meta)
+    isempty(tspec) || push!(meta, "thickness: " * join(("$s ∈ $b" for (s, b) in pairs(thickness)), "  "))
+    cols = [["p$i" for i in 1:nw]; [string(s) for (s, _) in tspec]]
+    logio, logpath = _open_log(save_data, p0, cols, log_obs, meta)
 
     cache_x = Ref(Float64[]); cache = Ref{Any}(nothing); n_eval = Ref(0)
     t_start = time()
@@ -442,7 +485,7 @@ function adj_opt(seed_design, FOMs;
             rm  = _select_mode(raw, λ, σ_sel; Qfloor)
             if rm === nothing
                 @printf("[%3d] no valid mode (no Q≥%.0f)  ‖Δp‖=%.3f\n",
-                        n_eval[], Qfloor, norm(x .- seed_design))
+                        n_eval[], Qfloor, norm(x .- p0))
                 for (i, md) in enumerate(raw)
                     @printf("        raw %d: λ=%.1f nm  Q=%.1f\n", i, md.λ*1000, md.Q)
                 end
@@ -453,7 +496,8 @@ function adj_opt(seed_design, FOMs;
                 F = needs_F ? _shifted_lu(A, rm.k_sq) : nothing
                 fields = Dict{Symbol,Tuple{Float64,Vector{Float64}}}()
                 if needs_V
-                    ∇V, Veff = _dV_dp(x, rm, grid, ϵ, inv_ϵr, εof, A, F, y, b, dk2; δ=1e-7)
+                    top = grid.cbg_bot + _unpack(x, nw, tspec, substrates, tCBG)[3]
+                    ∇V, Veff = _dV_dp(x, rm, grid, ϵ, inv_ϵr, εof, A, F, y, b, dk2; δ=1e-7, top, it)
                     fields[:V] = (Veff, ∇V)
                 end
                 if needs_ηG
@@ -478,13 +522,14 @@ function adj_opt(seed_design, FOMs;
 
     result = try
         lower === nothing ?
-            optimize(f, g!, seed_design, LBFGS(; linesearch), options) :
-            optimize(f, g!, lower, upper, seed_design, Fminbox(LBFGS(; linesearch)), options)
+            optimize(f, g!, p0, LBFGS(; linesearch), options) :
+            optimize(f, g!, lower, upper, p0, Fminbox(LBFGS(; linesearch)), options)
     finally
         logio !== nothing && close(logio)
     end
 
-    return (; design = Optim.minimizer(result), fom = Optim.minimum(result),
+    w, subs, tc = _unpack(Optim.minimizer(result), nw, tspec, substrates, tCBG)
+    return (; design = w, tCBG = tc, substrates = subs, fom = Optim.minimum(result),
               grid, result, logfile = logpath)
 end
 
