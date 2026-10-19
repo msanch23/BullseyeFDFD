@@ -8,7 +8,7 @@ function show_sim(ϵ, grid;
     xl = isnothing(x_limits) ? (0, grid.R) : x_limits
     yl = isnothing(y_limits) ? (0, grid.Z) : y_limits
 
-    p = heatmap(grid.ρp, grid.zp, abs.(sqrt.(ϵ))',
+    p = heatmap(grid.ρp, grid.zp, abs.(sqrt.(_cell(ϵ)))',
                 aspect_ratio = :equal,
                 xlabel = "ρ (μm)",
                 ylabel = "z (μm)",
@@ -125,7 +125,7 @@ function analyze_mode(mode, grid, ϵ, inv_ϵr)
 
     CF       = confinement_factor(W, grid)
     pml_frac = _pml_fraction(W, grid)
-    n_cavity = sqrt(maximum(real.(ϵ[1, grid.idx_cbg_bot:grid.idx_cbg_top])))
+    n_cavity = sqrt(maximum(real.(_cell(ϵ)[1, grid.idx_cbg_bot:grid.idx_cbg_top])))
     V_eff    = (total_energy / max_W) / (mode.λ / n_cavity)^3
     Fp       = (3.0 / (4.0*π^2)) * (mode.Q / V_eff)
 
