@@ -94,7 +94,7 @@ function solve_sim(grid, ϵ, λ, NA=nothing;
         driven = analyze_driven(_solve_driven(A_d, iϵ_d, grid, λ_d, source), grid)
 
         if purcell
-            ϵ_bulk    = fill(ϵ[source.ρ_idx, source.z_idx], grid.Nρ, grid.Nz)
+            ϵ_bulk    = fill(_cell(ϵ)[source.ρ_idx, source.z_idx], grid.Nρ, grid.Nz)
             A_b, iϵ_b = _assemble(grid, ϵ_bulk, λ_d; m=m, pml_kwargs...)
             d_bulk    = _solve_driven(A_b, iϵ_b, grid, λ_d, source)
             driven    = (; driven..., Purcell = source_power(grid, driven) /
