@@ -376,8 +376,9 @@ function _open_log(save_data, seed, cols, log_obs, meta)
                         Dates.format(now(), "yymmdd-HHMMSS") * ".csv")
     end
     io = open(path, "w")
-    gh = try readchomp(`git rev-parse --short HEAD`) catch; "unknown" end
-    println(io, "# git=$gh")
+    gh = try readchomp(pipeline(`git -C $(pkgdir(@__MODULE__)) describe --always --dirty --tags`; stderr=devnull))
+         catch; "unknown" end
+    println(io, "# git=$gh  version=$(pkgversion(@__MODULE__))")
     for line in meta; println(io, "# ", line); end
     println(io, "# seed=", seed)
     println(io, "eval,elapsed_s,J,", join(string.(log_obs), ","), ",", join(cols, ","))
