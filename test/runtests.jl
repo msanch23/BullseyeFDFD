@@ -371,10 +371,29 @@ const grid = conformal_grid(geom, λ; gridkw...)
         @test isnan(sd.driven.Purcell)                       # purcell=false ⇒ not computed
         se = solve_sim(gsolve, εsolve, λ; Nmodes=2, source=dipole(gsolve),
                        report=false, plots=false, purcell=false)
-        @test se.driven.λ == argmax(m -> m.CF, se.modes).λ   # dipole(grid) ⇒ CF-selected resonance
+        @test se.driven.λ == BullseyeFDFD._select_mode(se.modes, λ; grid=gsolve,
+                                                       inv_ϵr=se.inv_ϵr).λ   # dipole(grid) ⇒ selected resonance
         sp = solve_sim(gsolve, εsolve, λ; Nmodes=1, source=dipole(gsolve),
                        purcell=true, report=false, plots=false)
         @test isfinite(sp.driven.Purcell) && sp.driven.Purcell > 0   # LDOS bulk ratio
+    end
+
+    # Cavity modes keep ≲0.1 of their energy in the PML, PML/box modes ≳0.8. Among 8
+    # modes on this coarse grid the max-CF one is a PML mode, which the old default drove.
+    @testset "mode selection — PML-energy filter" begin
+        s8 = solve_sim(gsolve, εsolve, λ; Nmodes=8, source=dipole(gsolve),
+                       report=false, plots=false, purcell=false)
+        pf = [md.pml_frac for md in s8.modes]
+        @test all(0 .≤ pf .≤ 1)
+        @test pf ≈ [BullseyeFDFD._pml_fraction(md, gsolve, s8.inv_ϵr) for md in s8.modes]
+        @test pf[argmax(i -> s8.modes[i].Q, eachindex(s8.modes))] < 0.1   # fundamental
+        @test maximum(pf) > 0.8                                          # a PML mode is present
+        drv = only(filter(md -> md.λ == s8.driven.λ, s8.modes))
+        @test drv.pml_frac ≤ 0.5 && drv.Q ≥ 30                           # never drives a PML mode
+        @test BullseyeFDFD._select_index(s8.modes, λ, md -> md.CF, gsolve, s8.inv_ϵr) ==
+              argmax(i -> s8.modes[i].CF, eachindex(s8.modes))           # explicit select overrides
+        pml_only = filter(md -> md.pml_frac > 0.5, s8.modes)
+        @test_logs (:warn, r"PML") BullseyeFDFD._select_index(pml_only, λ, nothing, gsolve, s8.inv_ϵr)
     end
 
     @testset "solve_sim — NA gates collection FOMs" begin

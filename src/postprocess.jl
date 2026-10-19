@@ -103,6 +103,15 @@ function confinement_factor(W, grid)
     return int_eye / int_cbg
 end
 
+function _pml_fraction(W::AbstractMatrix, grid)
+    E   = W .* [cell_dV(grid, i, j) for i in 1:grid.Nρ, j in 1:grid.Nz]
+    pml = (grid.ρd .> grid.R - grid.PMLρ) .|
+          transpose((grid.zd .< grid.PMLz_bot) .| (grid.zd .> grid.Z - grid.PMLz_top))
+    return sum(E .* pml) / sum(E)
+end
+
+_pml_fraction(mode, grid, inv_ϵr) = _pml_fraction(_energy_density(mode, grid, inv_ϵr), grid)
+
 function analyze_mode(mode, grid, ϵ, inv_ϵr)
     W = _energy_density(mode, grid, inv_ϵr)
 
@@ -115,6 +124,7 @@ function analyze_mode(mode, grid, ϵ, inv_ϵr)
     max_W = maximum(W[1:idx_cbg_r, grid.idx_cbg_bot:grid.idx_cbg_top])
 
     CF       = confinement_factor(W, grid)
+    pml_frac = _pml_fraction(W, grid)
     n_cavity = sqrt(maximum(real.(ϵ[1, grid.idx_cbg_bot:grid.idx_cbg_top])))
     V_eff    = (total_energy / max_W) / (mode.λ / n_cavity)^3
     Fp       = (3.0 / (4.0*π^2)) * (mode.Q / V_eff)
@@ -122,9 +132,27 @@ function analyze_mode(mode, grid, ϵ, inv_ϵr)
     E_squared = abs2.(mode.Eρ) .+ abs2.(mode.Eϕ) .+ abs2.(mode.Ez)
     normE     = sqrt.(E_squared)
 
-    return (; λ=mode.λ, Q=mode.Q, V_eff, Fp, CF,
+    return (; λ=mode.λ, Q=mode.Q, V_eff, Fp, CF, pml_frac,
               raw_E=mode.raw_E, mode.Eρ, mode.Eϕ, mode.Ez,
               E_squared, normE, W, n_cavity, k_sq=mode.k_sq)
+end
+
+function _select_mode(raw, λ_target, σ=0.020; Qfloor=30.0, grid=nothing, inv_ϵr=nothing, fpml=0.5)
+    cand = filter(m -> m.Q ≥ Qfloor, raw)
+    grid === nothing || filter!(m -> _pml_fraction(m, grid, inv_ϵr) ≤ fpml, cand)
+    isempty(cand) && return nothing
+    score(m) = m.Q / (1 + ((m.λ - λ_target)/σ)^2)
+    argmax(score, cand)
+end
+
+function _select_index(modes, λ_target, select, grid, inv_ϵr)
+    select === nothing || return argmax(i -> select(modes[i]), eachindex(modes))
+    md = _select_mode(modes, λ_target; grid, inv_ϵr)
+    if md === nothing
+        md = _select_mode(modes, λ_target; Qfloor=-Inf)
+        @warn "no mode passes the Q-floor / PML-fraction filter; using the best of the rest" λ=md.λ Q=md.Q pml_frac=md.pml_frac
+    end
+    return findfirst(m -> m === md, modes)
 end
 
 function source_power(grid, driven)
@@ -147,23 +175,23 @@ end
 function report_modes(modes)
     isempty(modes) && return
     has_coll = hasproperty(first(modes), :η)
-    w  = has_coll ? 68 : 50
+    w  = has_coll ? 76 : 58
     println("\nEigenmode Analysis Report"); println(repeat("=", w))
     if has_coll
-        @printf("%-4s | %-7s | %-6s | %-7s | %-5s | %-6s | %-6s | %-6s\n",
-                "mode","λ (nm)","Q","V(λ/n)³","Fp","η (%)","Gauss.","CF")
+        @printf("%-4s | %-7s | %-6s | %-7s | %-5s | %-6s | %-6s | %-6s | %-5s\n",
+                "mode","λ (nm)","Q","V(λ/n)³","Fp","η (%)","Gauss.","CF","PML")
     else
-        @printf("%-4s | %-7s | %-6s | %-7s | %-5s | %-6s\n",
-                "mode","λ (nm)","Q","V(λ/n)³","Fp","CF")
+        @printf("%-4s | %-7s | %-6s | %-7s | %-5s | %-6s | %-5s\n",
+                "mode","λ (nm)","Q","V(λ/n)³","Fp","CF","PML")
     end
     println(repeat("-", w))
     for (i, m) in enumerate(modes)
         if has_coll
-            @printf("%-4d | %-7.2f | %-6.1f | %-7.4f | %-5.1f | %-6.2f | %-6.4f | %-6.4f\n",
-                    i, m.λ*1000, m.Q, m.V_eff, m.Fp, 100*m.η, m.gaussicity, m.CF)
+            @printf("%-4d | %-7.2f | %-6.1f | %-7.4f | %-5.1f | %-6.2f | %-6.4f | %-6.4f | %-5.3f\n",
+                    i, m.λ*1000, m.Q, m.V_eff, m.Fp, 100*m.η, m.gaussicity, m.CF, m.pml_frac)
         else
-            @printf("%-4d | %-7.2f | %-6.1f | %-7.4f | %-5.1f | %-6.4f\n",
-                    i, m.λ*1000, m.Q, m.V_eff, m.Fp, m.CF)
+            @printf("%-4d | %-7.2f | %-6.1f | %-7.4f | %-5.1f | %-6.4f | %-5.3f\n",
+                    i, m.λ*1000, m.Q, m.V_eff, m.Fp, m.CF, m.pml_frac)
         end
     end
     println(repeat("=", w)); println()

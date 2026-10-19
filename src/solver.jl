@@ -81,12 +81,12 @@ function solve_sim(grid, ϵ, λ, NA=nothing;
         report && report_modes(modes)
     end
 
-
-    score = select === nothing ? (md -> md.CF) : select
+    k = modes !== nothing && (source !== nothing || plots) ?
+        _select_index(modes, λ, select, grid, inv_ϵr) : nothing
 
     driven = nothing
     if source !== nothing
-        drive_mode = modes === nothing ? nothing : argmax(score, modes)
+        drive_mode = k === nothing ? nothing : modes[k]
         λ_d = source.λ   !== nothing ? source.λ    :
               drive_mode !== nothing ? drive_mode.λ : λ
 
@@ -106,7 +106,6 @@ function solve_sim(grid, ϵ, λ, NA=nothing;
 
     if plots
         if modes !== nothing
-            k = argmax(i -> score(modes[i]), eachindex(modes))
             plot_efield(grid, modes[k]; log_scale=false, label="Mode $k")
             NA !== nothing && plot_farfield_kspace(modes[k].θs, modes[k].farfield, NA)
         end

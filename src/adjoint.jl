@@ -389,21 +389,6 @@ function _fom_and_grad(k_sq, dk2, terms; fields=Dict{Symbol,Tuple{Float64,Vector
     return J, ∇, ovals
 end
 
-function _pml_fraction(mode, grid, inv_ϵr)
-    E   = _energy_density(mode, grid, inv_ϵr) .* [cell_dV(grid, i, j) for i in 1:grid.Nρ, j in 1:grid.Nz]
-    pml = (grid.ρd .> grid.R - grid.PMLρ) .|
-          transpose((grid.zd .< grid.PMLz_bot) .| (grid.zd .> grid.Z - grid.PMLz_top))
-    return sum(E .* pml) / sum(E)
-end
-
-function _select_mode(raw, λ_target, σ; Qfloor=30.0, grid=nothing, inv_ϵr=nothing, fpml=0.5)
-    cand = filter(m -> m.Q ≥ Qfloor, raw)
-    grid === nothing || filter!(m -> _pml_fraction(m, grid, inv_ϵr) ≤ fpml, cand)
-    isempty(cand) && return nothing
-    score(m) = m.Q / (1 + ((m.λ - λ_target)/σ)^2)
-    argmax(score, cand)
-end
-
 _fmt_obs(s, v) = s === :λ ? @sprintf("%.6f", v) :
                  s === :Q ? @sprintf("%.2f", v) :
                             @sprintf("%.6g", v)
