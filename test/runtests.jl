@@ -130,23 +130,27 @@ const grid = conformal_grid(geom, λ; gridkw...)
     ε_ref = build_epsilon(geom, grid)
 
     @testset "build_epsilon — shape & smoke" begin
-        @test ε_ref isa Matrix{ComplexF64}
-        @test size(ε_ref) == (grid.Nρ, grid.Nz)
-        @test !any(isnan, ε_ref)
-        @test all(isfinite, ε_ref)
+        @test ε_ref isa NamedTuple{(:cell, :ρρ, :ϕϕ, :zz)}
+        for M in ε_ref
+            @test M isa Matrix{ComplexF64}
+            @test size(M) == (grid.Nρ, grid.Nz)
+            @test all(isfinite, M)
+        end
     end
 
     @testset "build_epsilon — material values" begin
         jc = grid.idx_cbg_cen
-        @test ε_ref[1, jc]   ≈ ComplexF64(nSiN)^2               # eye disk = SiN
-        @test ε_ref[end, jc] ≈ ComplexF64(nSiN)^2               # bulk SiN beyond the buffer
-        band = real.(ε_ref[:, jc])
+        @test ε_ref.cell[1, jc]   ≈ ComplexF64(nSiN)^2               # eye disk = SiN
+        @test ε_ref.cell[end, jc] ≈ ComplexF64(nSiN)^2               # bulk SiN beyond the buffer
+        band = real.(ε_ref.cell[:, jc])
         @test any(x -> isapprox(x, nClad^2; atol=1e-9), band)   # etched trenches = clad
         @test any(x -> isapprox(x, nSiN^2;  atol=1e-6), band)   # SiN ridges
-        @test ε_ref[1, grid.idx_cbg_bot - 1] ≈ ComplexF64(nSiO2)^2  # top substrate
-        @test ε_ref[1, 1]   ≈ ComplexF64(nSi)^2                     # wafer (semi-infinite)
-        @test imag(ε_ref[1, 1]) < 0                                 # absorptive
-        @test ε_ref[1, end] ≈ ComplexF64(nClad)^2                   # cladding above
+        @test ε_ref.cell[1, grid.idx_cbg_bot - 1] ≈ ComplexF64(nSiO2)^2  # top substrate
+        @test ε_ref.cell[1, 1]   ≈ ComplexF64(nSi)^2                     # wafer (semi-infinite)
+        @test imag(ε_ref.cell[1, 1]) < 0                                 # absorptive
+        @test ε_ref.cell[1, end] ≈ ComplexF64(nClad)^2                   # cladding above
+        # away from every wall, all three Yee components see the cell's material
+        @test ε_ref.ρρ[1, jc] ≈ ε_ref.ϕϕ[1, jc] ≈ ε_ref.zz[1, jc] ≈ ε_ref.cell[1, jc]
     end
 
     # Slotted cavity: a central clad hole (ρ=0) precedes the SiN eye. build_epsilon
@@ -157,22 +161,23 @@ const grid = conformal_grid(geom, λ; gridkw...)
         grs = conformal_grid(gs, λ; gridkw...)
         εs  = build_epsilon(gs, grs)
         jc  = grs.idx_cbg_cen
-        @test εs[1, jc] ≈ ComplexF64(nClad)^2           # slot = clad hole at ρ=0, NOT the SiN eye
+        @test εs.cell[1, jc] ≈ ComplexF64(nClad)^2      # slot = clad hole at ρ=0, NOT the SiN eye
+        @test εs.zz[1, jc]   ≈ ComplexF64(nClad)^2      # Ez on the axis sits in the slot too
         ie = findfirst(i -> grs.ρd[i] > gs.slot.width + 0.5*gs.eye.width, 1:grs.Nρ)
-        @test εs[ie, jc] ≈ ComplexF64(nSiN)^2           # eye ring just outside the slot
+        @test εs.cell[ie, jc] ≈ ComplexF64(nSiN)^2      # eye ring just outside the slot
         @test grs.total_cbg_radius ≈ gs.slot.width + gs.eye.width +
               sum(gs.trench.width) + sum(gs.ring.width) + gs.buffer.width   # ε aligns with grid
     end
 
     # All indices equal ⇒ ε uniform everywhere: proves the ρ- and z-subpixel
-    # fractions form a partition of unity (no material dropped/double-counted).
+    # fractions (ramped walls included) form a partition of unity in every map.
     @testset "build_epsilon — partition (uniform index ⇒ uniform ε)" begin
         n0 = 1.7
         subs0 = [(n = n0, height = tSiO2), (n = n0, height = Inf)]
         geom0 = build_geometry(design, subs0, n0, n0, tCBG)
         grid0 = conformal_grid(geom0, λ; gridkw...)
         ε0 = build_epsilon(geom0, grid0)
-        @test all(x -> isapprox(x, ComplexF64(n0)^2; atol=1e-12), ε0)
+        @test all(M -> all(x -> isapprox(x, ComplexF64(n0)^2; atol=1e-12), M), ε0)
     end
 
     # Guards the adjoint-critical property: on a FROZEN grid, ε varies smoothly
@@ -181,10 +186,55 @@ const grid = conformal_grid(geom, λ; gridkw...)
         jc = grid.idx_cbg_cen
         gd = build_geometry([design[1] + 0.007; design[2:end]], substrates, nClad, nSiN, tCBG)
         εd = build_epsilon(gd, grid)                            # SAME (frozen) grid
-        @test any(x -> nClad^2 + 1e-6 < real(x) < nSiN^2 - 1e-6, εd[:, jc])  # blended ρ-cell
+        @test any(x -> nClad^2 + 1e-6 < real(x) < nSiN^2 - 1e-6, εd.cell[:, jc])  # blended ρ-cell
         Ndev = grid.idx_cbg_top - grid.idx_cbg_bot + 1
         gt = build_geometry(design, substrates, nClad, nSiN, tCBG + 0.5*tCBG/Ndev)
         @test build_epsilon(gt, grid) != ε_ref                 # ε responds to tCBG on a frozen grid
+    end
+
+    # With sharp walls (ramp = (0, 0)), a wall inside a voxel gives the harmonic mean for the
+    # field component normal to it and the area/length-weighted arithmetic mean for the others.
+    @testset "build_epsilon — anisotropic averaging (sharp walls)" begin
+        eS, eC = ComplexF64(nSiN)^2, ComplexF64(nClad)^2
+        jc = grid.idx_cbg_cen
+        i0 = argmin(abs.(grid.ρp .- design[1]))                 # eye wall's node at the seed
+        ρw = design[1] + 0.3 * grid.Δρp[i0]                     # 0.3 cell outward: inside cell i0
+        εd = build_epsilon(build_geometry([ρw; design[2:end]], substrates, nClad, nSiN, tCBG), grid;
+                           ramp = (0.0, 0.0))
+        a, b = grid.ρp[i0], grid.ρp[i0+1]; f = (ρw^2 - a^2) / (b^2 - a^2)
+        @test εd.ρρ[i0, jc]   ≈ 1 / (f/eS + (1 - f)/eC)          # Eρ ⟂ ρ-wall: harmonic
+        @test εd.cell[i0, jc] ≈ f*eS + (1 - f)*eC                # cell map: arithmetic
+        a, b = grid.ρd[i0-1], grid.ρd[i0]; g = (ρw^2 - a^2) / (b^2 - a^2)
+        @test εd.ϕϕ[i0, jc] ≈ g*eS + (1 - g)*eC                  # Eϕ, Ez ∥ ρ-wall: arithmetic over
+        @test εd.zz[i0, jc] ≈ g*eS + (1 - g)*eC                  # the node voxel [ρd[i0-1], ρd[i0]]
+        j0 = grid.idx_cbg_top + 1                               # first cladding cell at the seed
+        zw = grid.cbg_top + 0.3 * grid.Δzp[j0]                  # top wall 0.3 cell up: inside cell j0
+        εt = build_epsilon(build_geometry(design, substrates, nClad, nSiN, zw - grid.cbg_bot), grid;
+                           ramp = (0.0, 0.0))
+        @test εt.zz[1, j0]   ≈ 1 / (0.3/eS + 0.7/eC)             # Ez ⟂ z-wall: harmonic
+        @test εt.cell[1, j0] ≈ 0.3*eS + 0.7*eC
+        h = (zw - grid.zd[j0-1]) / (grid.zd[j0] - grid.zd[j0-1])
+        @test εt.ρρ[1, j0] ≈ h*eS + (1 - h)*eC                   # Eρ, Eϕ ∥ z-wall: arithmetic over
+        @test εt.ϕϕ[1, j0] ≈ h*eS + (1 - h)*eC                   # the node voxel [zd[j0-1], zd[j0]]
+    end
+
+    # The ramped walls make the Yee-node ε C¹ in every width and thickness. At the conformal seed
+    # every wall sits on a grid line, where the sharp map kinks; one-sided derivatives must agree.
+    @testset "build_epsilon — C¹ on a frozen grid" begin
+        yee(d, t, s; kw...) = BullseyeFDFD._yee_eps(build_epsilon(build_geometry(d,
+                                  [(n = nSiO2, height = s), (n = nSi, height = Inf)], nClad, nSiN, t), grid; kw...), grid)
+        nd = length(design)
+        bump(k, h) = k <= nd ? (setindex!(copy(design), design[k] + h, k), tCBG, tSiO2) :
+                     k == nd + 1 ? (design, tCBG + h, tSiO2) : (design, tCBG, tSiO2 + h)
+        δ = 1e-7; y0 = yee(design, tCBG, tSiO2)
+        for k in (1, 2, 3, nd + 1, nd + 2)                      # eye, trench 1, ring 1, tCBG, tSiO2
+            R = (yee(bump(k, δ)...) .- y0) ./ δ; L = (y0 .- yee(bump(k, -δ)...)) ./ δ
+            @test maximum(abs.(R .- L)) < 1e-3 * maximum(abs.(R))
+        end
+        s0 = yee(design, tCBG, tSiO2; ramp = (0.0, 0.0))          # control: sharp walls DO kink here
+        R = (yee(bump(1, δ)...; ramp = (0.0, 0.0)) .- s0) ./ δ
+        L = (s0 .- yee(bump(1, -δ)...; ramp = (0.0, 0.0))) ./ δ
+        @test maximum(abs.(R .- L)) > 0.1 * maximum(abs.(R))
     end
 
     # -- operators: CeChOperators ------------------------------------------
@@ -320,9 +370,12 @@ const grid = conformal_grid(geom, λ; gridkw...)
         @test nnz(invϵ) == 3N && nnz(invμ) == 3N            # strictly diagonal
         @test all(≈(1.0 + 0im), diag(invμ))                 # μ = I (non-magnetic)
         @test all(isfinite, diag(invϵ))
-        # Ez block (3rd) diag = 1/ϵ_zz with ϵ_zz[i,j] = ½(ϵ[i,j] + ϵ[i-1,j])
+        # build_epsilon output: diag = 1 ./ [ρρ; ϕϕ; zz], each block column-major (ρ fastest)
+        @test diag(invϵ) == 1 ./ vcat(vec(ε_ref.ρρ), vec(ε_ref.ϕϕ), vec(ε_ref.zz))
+        # plain cell map (hand-built or uniform): ½/½ Yee averaging, e.g. Ez: ½(ϵ[i,j] + ϵ[i-1,j])
+        invc, _ = BullseyeFDFD.material_tensors(ε_ref.cell, grid)
         i = grid.Nρ ÷ 2; j = grid.idx_cbg_cen
-        @test diag(invϵ)[2N + (j-1)*grid.Nρ + i] ≈ 1 / (0.5 * (ε_ref[i,j] + ε_ref[i-1,j]))
+        @test diag(invc)[2N + (j-1)*grid.Nρ + i] ≈ 1 / (0.5 * (ε_ref.cell[i,j] + ε_ref.cell[i-1,j]))
         # uniform index ⇒ every staggered tensor = n0² ⇒ diag = 1/n0²
         n0 = 1.7; subs0 = [(n = n0, height = tSiO2), (n = n0, height = Inf)]
         g0u  = build_geometry(design, subs0, n0, n0, tCBG)
