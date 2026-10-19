@@ -65,7 +65,12 @@ function build_epsilon(geometry, grid)
     return ε
 end
 
-function material_tensors(ϵ_grid, grid)
+_cell(ϵ::AbstractMatrix) = ϵ
+_cell(ϵ::NamedTuple)     = ϵ.cell
+
+_yee_eps(ϵ::NamedTuple, grid) = vcat(vec(ϵ.ρρ), vec(ϵ.ϕϕ), vec(ϵ.zz))
+
+function _yee_eps(ϵ_grid::AbstractMatrix, grid)
     ϵ_ρρ = zeros(ComplexF64, grid.Nρ, grid.Nz)
     ϵ_ρρ[:, 1]     .= ϵ_grid[:, 1]
     ϵ_ρρ[:, 2:end] .= 0.5 .* (ϵ_grid[:, 2:end] .+ ϵ_grid[:, 1:end-1])
@@ -78,11 +83,11 @@ function material_tensors(ϵ_grid, grid)
     ϵ_ϕϕ[:, 1]     .= ϵ_zz[:, 1]
     ϵ_ϕϕ[:, 2:end] .= 0.5 .* (ϵ_zz[:, 2:end] .+ ϵ_zz[:, 1:end-1])
 
-    Inv_Eρ = spdiagm(0 => 1.0 ./ vec(ϵ_ρρ))
-    Inv_Eϕ = spdiagm(0 => 1.0 ./ vec(ϵ_ϕϕ))
-    Inv_Ez = spdiagm(0 => 1.0 ./ vec(ϵ_zz))
+    return vcat(vec(ϵ_ρρ), vec(ϵ_ϕϕ), vec(ϵ_zz))
+end
 
-    inv_ϵr = blockdiag(Inv_Eρ, Inv_Eϕ, Inv_Ez)
+function material_tensors(ϵ, grid)
+    inv_ϵr = spdiagm(0 => 1.0 ./ _yee_eps(ϵ, grid))
     inv_μr = spdiagm(0 => ones(ComplexF64, 3grid.N))
     return inv_ϵr, inv_μr
 end
