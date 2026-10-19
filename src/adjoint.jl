@@ -205,7 +205,7 @@ function _farfield_terms(mode, grid, Ce; NA, m=1, ff_z=nothing, res=1080)
             bp += ( Eϕs[i]+1im*Eρs[i])*Jp*wi; bm += ( Eϕs[i]-1im*Eρs[i])*Jm*wi
             ap += (-Hϕs[i]-1im*Hρs[i])*Jp*wi; am += (-Hϕs[i]+1im*Hρs[i])*Jm*wi
         end
-        Eθ[j] = cθ*((bm-bp)+Z0*(am-ap)); Eϕf[j] = 1im*((bp+bm)+Z0*(ap+am))
+        Eθ[j] = 1im*(bp+bm) - Z0*cθ*(am-ap); Eϕf[j] = cθ*(bm-bp) + 1im*Z0*(ap+am)
     end
     I = abs2.(Eθ) .+ abs2.(Eϕf); sinθ = sin.(θs)
     θw = asin(NA); G = exp.(-2.0 .* (θs./θw).^2); sqrtI = sqrt.(I)
@@ -223,7 +223,7 @@ function _ff_backward(ft, grid, Ce, dI; m=1)
     dHρs = zeros(ComplexF64,nh); dHϕs = zeros(ComplexF64,nh)
     for (j, θ) in enumerate(ft.θs)
         kρ = k0*sin(θ); cθ = cos(θ); gθ = dEθ[j]; gϕ = dEϕ[j]
-        dbm = gθ*cθ+gϕ*1im; dbp = -gθ*cθ+gϕ*1im; dam = gθ*cθ*Z0+gϕ*1im*Z0; dap = -gθ*cθ*Z0+gϕ*1im*Z0
+        dbm = gθ*1im+gϕ*cθ; dbp = gθ*1im-gϕ*cθ; dam = -gθ*cθ*Z0+gϕ*1im*Z0; dap = gθ*cθ*Z0+gϕ*1im*Z0
         for i in 1:nh
             Jp = besselj(m+1, kρ*ρ[i]); Jm = besselj(m-1, kρ*ρ[i]); wi = w[i]
             dEϕs[i] += dbp*Jp*wi + dbm*Jm*wi

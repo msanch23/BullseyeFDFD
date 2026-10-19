@@ -248,8 +248,8 @@ function calc_farfield(grid, mode, Ce, top_farfield=nothing; m=1, resolution=108
             a_plus  += (-Hϕ_s[i] - 1im*Hρ_s[i]) * Jmp1 * w
             a_minus += (-Hϕ_s[i] + 1im*Hρ_s[i]) * Jmm1 * w
         end
-        Eθ_ff = cosθ * ((b_minus - b_plus) + Z0*(a_minus - a_plus))
-        Eϕ_ff = 1im  * ((b_plus + b_minus) + Z0*(a_plus + a_minus))
+        Eθ_ff = 1im*(b_plus + b_minus) - Z0*cosθ*(a_minus - a_plus)
+        Eϕ_ff = cosθ*(b_minus - b_plus) + 1im*Z0*(a_plus + a_minus)
         farfield_intensity[iθ] = abs2(Eθ_ff) + abs2(Eϕ_ff)
     end
     return θs, farfield_intensity

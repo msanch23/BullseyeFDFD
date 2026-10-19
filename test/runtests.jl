@@ -455,4 +455,37 @@ const grid = conformal_grid(geom, λ; gridkw...)
         s1 = solve_sim(gsolve, εsolve, λ, 0.4; Nmodes=1, report=false, plots=false)
         @test hasproperty(s1.modes[1], :η) && isfinite(s1.modes[1].η)
     end
+
+    # Near→far: Js = ẑ×H, Ms = −ẑ×E, Eθ = −(Lφ+Z₀Nθ), Eφ = Lθ−Z₀Nφ (e^{+jωt}, fields ∝ e^{−imφ}).
+    # A brute-force Love integral over the plane calc_farfield samples (φ-sum without 2π/nφ)
+    # is exactly (nφ/2)² × its intensity; the m=±1 mirror pair (Eφ → −Eφ) radiates identically.
+    @testset "calc_farfield — Love transform & m=±1 mirror" begin
+        sf = solve_sim(gsolve, εsolve, λ; Nmodes=1, report=false, plots=false)
+        md, Ce = sf.modes[1], sf.Ce
+        θs, I = calc_farfield(gsolve, md, Ce; m=1, resolution=7)
+
+        _, Hρ, Hϕ, _ = calc_H_fields(gsolve, md, Ce)
+        iz  = argmin(abs.(gsolve.zp .- BullseyeFDFD.default_monitors(gsolve).farfield))
+        avg(v) = 0.5 .* (v[1:end-1] .+ v[2:end])
+        nh  = min(gsolve.Nρ - 1, gsolve.idx_PMLρ)
+        ρ   = gsolve.ρd[1:nh]; w = 0.5 .* (gsolve.ρp[2:nh+1].^2 .- gsolve.ρp[1:nh].^2)
+        Eρs = md.Eρ[1:nh, iz];                              Eϕs = avg(md.Eϕ[:, iz])[1:nh]
+        Hρs = avg(0.5 .* (Hρ[:, iz-1] .+ Hρ[:, iz]))[1:nh]; Hϕs = (0.5 .* (Hϕ[:, iz-1] .+ Hϕ[:, iz]))[1:nh]
+        k0, Z0, nφ = 2π / md.λ, 376.73, 128
+        love = map(θs) do θ
+            Nx = Ny = Lx = Ly = 0.0im
+            for φ in (0:nφ-1) .* (2π/nφ), i in 1:nh
+                e = cis(-φ + k0 * ρ[i] * sin(θ) * cos(φ)) * w[i]
+                Ex = Eρs[i]*cos(φ) - Eϕs[i]*sin(φ); Ey = Eρs[i]*sin(φ) + Eϕs[i]*cos(φ)
+                Hx = Hρs[i]*cos(φ) - Hϕs[i]*sin(φ); Hy = Hρs[i]*sin(φ) + Hϕs[i]*cos(φ)
+                Nx -= Hy*e; Ny += Hx*e; Lx += Ey*e; Ly -= Ex*e
+            end
+            abs2(Ly + Z0*cos(θ)*Nx) + abs2(cos(θ)*Lx - Z0*Ny)
+        end
+        @test love ≈ (nφ/2)^2 .* I  rtol=1e-8
+
+        n   = gsolve.N
+        mir = (; md..., m=-1, Eϕ=-md.Eϕ, raw_E=[md.raw_E[1:n]; -md.raw_E[n+1:2n]; md.raw_E[2n+1:3n]])
+        @test calc_farfield(gsolve, mir, CeChOperators(gsolve, λ; m=-1)[1]; m=-1, resolution=7)[2] ≈ I  rtol=1e-10
+    end
 end
