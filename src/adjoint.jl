@@ -58,21 +58,31 @@ function _adjoint_setup(seed, substrates, nClad, nCBG, tCBG, slotted, λ, m, gri
     _, inv_μr = material_tensors(build_epsilon(geom0, grid), grid)
     M   = Ch * inv_μr * Ce
     εof = d -> build_epsilon(build_geometry(d, substrates, nClad, nCBG, tCBG; slotted), grid)
-    return grid, M, εof, Ce
+    return grid, M, εof, Ce, _reciprocity_weight(grid, λ; m)
 end
 
 _shifted_lu(A, k_sq) = lu(A - (k_sq + 1e-6)*I)
 
-function _left_eigvec(F, y0; steps=2)
-    y = copy(y0)
-    for _ in 1:steps
-        y = F' \ y
-        y ./= norm(y)
-    end
+function _reciprocity_weight(grid, λ; m=1)
+    Sρp, Sρd, Szp, Szd, ρ̃p, ρ̃d = s_vectors(grid, λ)
+    aρ = ρ̃d .* grid.Δρp .* Sρd
+    aϕ = ρ̃p .* grid.Δρd .* Sρp
+    az = copy(aϕ); m == 0 && (az[1] = grid.ρd[1]^2 / 2)
+    ℓzp = grid.Δzd .* Szp; ℓzd = grid.Δzp .* Szd
+    return vcat(vec(aρ * transpose(ℓzp)), vec(-aϕ * transpose(ℓzp)), vec(az * transpose(ℓzd)))
+end
+
+function _left_eigvec(W, A, inv_ϵr, x, k_sq, grid)
+    z  = W .* x ./ Vector(diag(inv_ϵr))
+    ax = [2grid.N + (j-1)*grid.Nρ + 1 for j in 1:grid.Nz]
+    z[ax] .= (transpose(A) * z)[ax] ./ k_sq
+    y  = conj.(z) ./ norm(z)
+    res = norm(A' * y .- conj(k_sq) .* y) / abs(k_sq)
+    res < 1e-5 || error(@sprintf("left-eigenvector residual %.1e: W out of sync with CeChOperators", res))
     return y
 end
 
-function _adj_field(F, A, k_sq, ψ, φ, src; refine=5)
+function _adj_field(F, A, k_sq, ψ, φ, src; refine=2)
     defl!(r) = (r .-= ψ .* (dot(ψ, r)/dot(ψ, ψ)); r)
     rhs = defl!(Vector(conj.(src)))
     M   = A' - conj(k_sq)*I
@@ -125,9 +135,9 @@ function _dk2_dparams(design, grad_ε, εof; δ=1e-7)
     return grad
 end
 
-function _dk2_dp(design, mode, grid, A, inv_ϵr, M, εof, F, y0; δ=1e-7)
+function _dk2_dp(design, mode, grid, A, inv_ϵr, M, εof, W; δ=1e-7)
     x = mode.raw_E
-    y = _left_eigvec(F, y0)
+    y = _left_eigvec(W, A, inv_ϵr, x, mode.k_sq, grid)
     b = M * x
     dk2_dinv = conj(y) .* b ./ dot(y, x)
     grad_ε   = _dk2_deps_grid(dk2_dinv, inv_ϵr, grid)
@@ -403,13 +413,14 @@ function adj_opt(seed_design, FOMs;
                                          x_abstol=1e-3, f_reltol=1e-4,
                                          show_trace=true))
 
-    grid, M, εof, Ce = _adjoint_setup(seed_design, substrates, nClad, nCBG, tCBG,
-                                      slotted, λ, m, grid_kwargs)
+    grid, M, εof, Ce, W = _adjoint_setup(seed_design, substrates, nClad, nCBG, tCBG,
+                                         slotted, λ, m, grid_kwargs)
 
     log_obs  = unique([t.observable for t in FOMs])
     needs_V  = any(t.observable in (:V, :Fp) for t in FOMs)
     needs_ηG = any(t.observable === :ηG for t in FOMs)
     needs_η  = any(t.observable === :η  for t in FOMs)
+    needs_F  = needs_V || needs_ηG || needs_η
     (needs_ηG || needs_η) && NA === nothing &&
         error("η/ηG figures of merit require an NA (pass NA=… to adj_opt)")
     meta = ["cbg: nClad=$nClad  nCBG=$nCBG  tCBG=$tCBG",
@@ -418,7 +429,6 @@ function adj_opt(seed_design, FOMs;
             "FOM: " * join([t.label for t in FOMs], " · ")]
     logio, logpath = _open_log(save_data, seed_design, log_obs, meta)
 
-    y_prev  = Ref{Union{Nothing,Vector{ComplexF64}}}(nothing)
     cache_x = Ref(Float64[]); cache = Ref{Any}(nothing); n_eval = Ref(0)
     t_start = time()
 
@@ -439,10 +449,8 @@ function adj_opt(seed_design, FOMs;
                 cache[] = (J = 1e3, ∇ = zeros(length(x)))
                 _log_row(logio, log_obs, n_eval[], time()-t_start, 1e3, Dict{Symbol,Float64}(), x)
             else
-                y0 = (y_prev[] !== nothing && length(y_prev[]) == length(rm.raw_E)) ?
-                     y_prev[] : rm.raw_E
-                F = _shifted_lu(A, rm.k_sq)
-                dk2, y, b = _dk2_dp(x, rm, grid, A, inv_ϵr, M, εof, F, y0; δ=1e-7)
+                dk2, y, b = _dk2_dp(x, rm, grid, A, inv_ϵr, M, εof, W; δ=1e-7)
+                F = needs_F ? _shifted_lu(A, rm.k_sq) : nothing
                 fields = Dict{Symbol,Tuple{Float64,Vector{Float64}}}()
                 if needs_V
                     ∇V, Veff = _dV_dp(x, rm, grid, ϵ, inv_ϵr, εof, A, F, y, b, dk2; δ=1e-7)
@@ -457,7 +465,6 @@ function adj_opt(seed_design, FOMs;
                     fields[:η] = (ηv, ∇η)
                 end
                 J, ∇, ob = _fom_and_grad(rm.k_sq, dk2, FOMs; fields)
-                y_prev[] = y
                 cache[]  = (; J, ∇)
                 @printf("[%3d] J=%.4f  λ=%.2f nm  Q=%.1f%s\n", n_eval[], J, ob[:λ]*1000,
                         ob[:Q], haskey(ob, :V) ? @sprintf("  V=%.4f", ob[:V]) : "")
