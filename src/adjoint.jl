@@ -117,42 +117,14 @@ function _adj_field(F, A, k_sq, ψ, φ, src; refine=2)
     return defl!(v)
 end
 
-function _zavgᵀ(d)
-    Nρ, Nz = size(d); out = zeros(eltype(d), Nρ, Nz)
-    @views out[:, 1] .+= d[:, 1]
-    for j in 2:Nz
-        @views out[:, j]   .+= 0.5 .* d[:, j]
-        @views out[:, j-1] .+= 0.5 .* d[:, j]
-    end
-    return out
-end
+_dk2_deps(dinv, inv_ϵr) = dinv .* .-(Vector(diag(inv_ϵr)).^2)
 
-function _ρavgᵀ(d)
-    Nρ, Nz = size(d); out = zeros(eltype(d), Nρ, Nz)
-    @views out[1, :] .+= d[1, :]
-    for i in 2:Nρ
-        @views out[i, :]   .+= 0.5 .* d[i, :]
-        @views out[i-1, :] .+= 0.5 .* d[i, :]
-    end
-    return out
-end
-
-function _deps_grid(dtens, grid)
-    N = grid.N
-    dρρ = reshape(dtens[1:N],     grid.Nρ, grid.Nz)
-    dϕϕ = reshape(dtens[N+1:2N],  grid.Nρ, grid.Nz)
-    dzz = reshape(dtens[2N+1:3N], grid.Nρ, grid.Nz)
-    return _zavgᵀ(dρρ) .+ _ρavgᵀ(dzz .+ _zavgᵀ(dϕϕ))
-end
-
-_dk2_deps_grid(dinv, inv_ϵr, grid) = _deps_grid(dinv .* .-(diag(inv_ϵr).^2), grid)
-
-function _dk2_dparams(design, grad_ε, εof; δ=1e-7)
+function _dk2_dparams(design, grad_ε, εof, grid; δ=1e-7)
     grad = zeros(ComplexF64, length(design))
     for k in eachindex(design)
         dp = copy(design); dp[k] += δ
         dm = copy(design); dm[k] -= δ
-        grad[k] = sum(grad_ε .* ((εof(dp) .- εof(dm)) ./ (2δ)))
+        grad[k] = sum(grad_ε .* ((_yee_eps(εof(dp), grid) .- _yee_eps(εof(dm), grid)) ./ (2δ)))
     end
     return grad
 end
@@ -162,8 +134,8 @@ function _dk2_dp(design, mode, grid, A, inv_ϵr, M, εof, W; δ=1e-7)
     y = _left_eigvec(W, A, inv_ϵr, x, mode.k_sq, grid)
     b = M * x
     dk2_dinv = conj(y) .* b ./ dot(y, x)
-    grad_ε   = _dk2_deps_grid(dk2_dinv, inv_ϵr, grid)
-    return _dk2_dparams(design, grad_ε, εof; δ=δ), y, b
+    grad_ε   = _dk2_deps(dk2_dinv, inv_ϵr)
+    return _dk2_dparams(design, grad_ε, εof, grid; δ=δ), y, b
 end
 
 function _V_terms(mode, grid, ϵ, inv_ϵr; top=grid.cbg_top)
@@ -176,7 +148,7 @@ function _V_terms(mode, grid, ϵ, inv_ϵr; top=grid.cbg_top)
     box = ((1:grid.Nρ) .<= ir) .* transpose(fz)
     Wmax, istar = findmax(ifelse.(box .> 0, W, -Inf))
     Vphys = sum(W .* ΔV .* box) / Wmax
-    n_cav = sqrt(maximum(real.(ϵ[1, fz .> 0])))
+    n_cav = sqrt(maximum(real.(_cell(ϵ)[1, fz .> 0])))
     Veff  = Vphys / (mode.λ/n_cav)^3
     return (; ΔV, box, Wmax, istar, Vphys, Veff, n_cav)
 end
@@ -202,9 +174,9 @@ function _dV_dp(design, mode, grid, ϵ, inv_ϵr, εof, A, F, ψ, b, dk2; δ=1e-7
     t = _V_terms(mode, grid, ϵ, inv_ϵr; top)
     src, dir = _dV_sources(mode, t, inv_ϵr, grid)
     v   = _adj_field(F, A, mode.k_sq, ψ, x, src)
-    dAφ = _dk2_dparams(design, _dk2_deps_grid(conj(v) .* b, inv_ϵr, grid), εof; δ=δ)
+    dAφ = _dk2_dparams(design, _dk2_deps(conj(v) .* b, inv_ϵr), εof, grid; δ=δ)
     dVp = 2 .* real.(dot(v, x) .* dk2 .- dAφ) .+
-          real.(_dk2_dparams(design, _deps_grid(dir, grid), εof; δ=δ))
+          real.(_dk2_dparams(design, dir, εof, grid; δ=δ))
     it === nothing || (dVp[it] += (_V_terms(mode, grid, ϵ, inv_ϵr; top=top+δ).Vphys -
                                    _V_terms(mode, grid, ϵ, inv_ϵr; top=top-δ).Vphys) / 2δ)
     k  = sqrt(mode.k_sq)
@@ -333,7 +305,7 @@ end
 
 function _field_grad(design, x, k_sq, grid, inv_ϵr, εof, A, F, ψ, b, dk2, src, gλ; δ=1e-7)
     v   = _adj_field(F, A, k_sq, ψ, x, src)
-    dAφ = _dk2_dparams(design, _dk2_deps_grid(conj(v) .* b, inv_ϵr, grid), εof; δ=δ)
+    dAφ = _dk2_dparams(design, _dk2_deps(conj(v) .* b, inv_ϵr), εof, grid; δ=δ)
     eig = 2 .* real.(dot(v, x) .* dk2 .- dAφ)
     k   = sqrt(k_sq); dλ = -2π/real(k)^2 .* real.(dk2 ./ (2k))
     return eig .+ gλ .* dλ
