@@ -10,18 +10,18 @@ using Optim
 using Dates
 using LineSearches
 
-include("geometry.jl")     # Feature/Layer types + build_geometry, design ↔ params bridge
-include("grid.jl")         # cylindrical (r, z) mesh + coordinate stretching / PML profiles
-include("operators.jl")    # sparse derivative / curl operators on the grid
-include("materials.jl")    # ε, μ, σ assignment onto the grid
-include("solver.jl")       # system assembly + linear solve
-include("postprocess.jl")  # field extraction, modes, fluxes, plotting helpers
-include("adjoint.jl")      # eigenvalue-sensitivity adjoint + FOM terms + optimizer driver
+include("geometry.jl")     # build_geometry: design vector → role blocks (eye/trench/ring/buffer) + stack
+include("grid.jl")         # CylindricalGrid + conformal_grid ((ρ, z) mesh: feature edges on nodes, stretched padding)
+include("operators.jl")    # s_vectors (PML stretching) + CeChOperators (curls, ρ=0 axis, m)
+include("materials.jl")    # build_epsilon (Yee-voxel ε, ramped walls) + material_tensors
+include("solver.jl")       # solve_sim: shift-invert eigensolve + driven dipole, mode selection
+include("postprocess.jl")  # mode/driven analysis, V/Purcell/CF, flux, far-field, plotting
+include("adjoint.jl")      # eigenvalue/eigenvector adjoints, FOM terms, adj_opt driver
 
 export build_geometry
 export conformal_grid
 export build_epsilon
-export show_sim          
+export show_sim
 export CeChOperators
 export solve_sim, dipole
 export analyze_mode, report_modes, confinement_factor, analyze_driven, report_driven
