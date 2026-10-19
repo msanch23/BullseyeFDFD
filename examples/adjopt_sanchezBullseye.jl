@@ -34,4 +34,4 @@ FOMs = [λ_target(λ0), Q_target(:max)];
 res  = adj_opt(design, FOMs; substrates, nClad, nCBG=nSiN, tCBG, λ=λ0,
                lower=fill(0.05, length(design)), upper=fill(1.00, length(design)),
                thickness=(; tCBG=(0.15, 0.22), substrate1=(0.65, 0.85)),
-               Nmodes=5, iterations=50, grid_kwargs = (; λPts=20, geoPts=8));
+               Nmodes=10, iterations=50, grid_kwargs = (; λPts=20, geoPts=8));

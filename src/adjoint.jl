@@ -389,8 +389,16 @@ function _fom_and_grad(k_sq, dk2, terms; fields=Dict{Symbol,Tuple{Float64,Vector
     return J, ∇, ovals
 end
 
-function _select_mode(raw, λ_target, σ; Qfloor=30.0)
+function _pml_fraction(mode, grid, inv_ϵr)
+    E   = _energy_density(mode, grid, inv_ϵr) .* [cell_dV(grid, i, j) for i in 1:grid.Nρ, j in 1:grid.Nz]
+    pml = (grid.ρd .> grid.R - grid.PMLρ) .|
+          transpose((grid.zd .< grid.PMLz_bot) .| (grid.zd .> grid.Z - grid.PMLz_top))
+    return sum(E .* pml) / sum(E)
+end
+
+function _select_mode(raw, λ_target, σ; Qfloor=30.0, grid=nothing, inv_ϵr=nothing, fpml=0.5)
     cand = filter(m -> m.Q ≥ Qfloor, raw)
+    grid === nothing || filter!(m -> _pml_fraction(m, grid, inv_ϵr) ≤ fpml, cand)
     isempty(cand) && return nothing
     score(m) = m.Q / (1 + ((m.λ - λ_target)/σ)^2)
     argmax(score, cand)
@@ -431,7 +439,7 @@ end
 function adj_opt(seed_design, FOMs;
                  substrates, nClad, nCBG, tCBG, slotted=false, thickness=(;),
                  λ=0.780, NA=nothing, lower=nothing, upper=nothing,
-                 Nmodes=5, m=1, grid_kwargs=(;),
+                 Nmodes=10, m=1, grid_kwargs=(;),
                  σ_sel=0.020, Qfloor=30.0, save_data=false,
                  iterations=50, linesearch=BackTracking(),
                  options=Optim.Options(; iterations, outer_iterations=10,
@@ -457,7 +465,7 @@ function adj_opt(seed_design, FOMs;
             error("tCBG upper bound reaches the top flux/far-field plane of the seed grid")
     end
 
-    log_obs  = unique([t.observable for t in FOMs])
+    log_obs  = [unique([t.observable for t in FOMs]); :pml_frac]
     needs_V  = any(t.observable in (:V, :Fp) for t in FOMs)
     needs_ηG = any(t.observable === :ηG for t in FOMs)
     needs_η  = any(t.observable === :η  for t in FOMs)
@@ -482,13 +490,15 @@ function adj_opt(seed_design, FOMs;
             inv_ϵr = material_tensors(ϵ, grid)[1]
             A      = inv_ϵr * M
             raw = _solve_eig(A, grid, λ, Nmodes, 1e-6, 3000)
-            rm  = _select_mode(raw, λ, σ_sel; Qfloor)
+            rm  = _select_mode(raw, λ, σ_sel; Qfloor, grid, inv_ϵr)
             if rm === nothing
-                @printf("[%3d] no valid mode (no Q≥%.0f)  ‖Δp‖=%.3f\n",
+                @printf("[%3d] no valid mode (none with Q≥%.0f and PML fraction ≤0.5)  ‖Δp‖=%.3f\n",
                         n_eval[], Qfloor, norm(x .- p0))
                 for (i, md) in enumerate(raw)
-                    @printf("        raw %d: λ=%.1f nm  Q=%.1f\n", i, md.λ*1000, md.Q)
+                    @printf("        raw %d: λ=%.1f nm  Q=%.1f  PML %.2f\n", i, md.λ*1000, md.Q,
+                            _pml_fraction(md, grid, inv_ϵr))
                 end
+                n_eval[] == 1 && error("adj_opt: no valid mode at the seed design (raw modes listed above)")
                 cache[] = (J = 1e3, ∇ = zeros(length(x)))
                 _log_row(logio, log_obs, n_eval[], time()-t_start, 1e3, Dict{Symbol,Float64}(), x)
             else
@@ -509,6 +519,7 @@ function adj_opt(seed_design, FOMs;
                     fields[:η] = (ηv, ∇η)
                 end
                 J, ∇, ob = _fom_and_grad(rm.k_sq, dk2, FOMs; fields)
+                ob[:pml_frac] = _pml_fraction(rm, grid, inv_ϵr)
                 cache[]  = (; J, ∇)
                 @printf("[%3d] J=%.4f  λ=%.2f nm  Q=%.1f%s\n", n_eval[], J, ob[:λ]*1000,
                         ob[:Q], haskey(ob, :V) ? @sprintf("  V=%.4f", ob[:V]) : "")
