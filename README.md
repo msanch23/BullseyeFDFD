@@ -191,7 +191,7 @@ A paper is in preparation; details will be updated on publication. For now:
   title        = {{BullseyeFDFD}: a cylindrical FDFD solver for
                   bullseye (circular Bragg grating) cavities},
   year         = {2026},
-  version      = {0.4.0},
+  version      = {0.6.0},
   howpublished = {\url{https://github.com/msanch23/BullseyeFDFD}}
 }
 ```
