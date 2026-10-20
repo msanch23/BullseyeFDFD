@@ -104,19 +104,20 @@ function fit_layer(L, Δ_near, Δ_far, stretch_ratio, max_Δ)
 end;
 
 function conformal_grid(geometry, λ;
-                        λPts=24, geoPts=16, padPts=16,
+                        λPts=24, geoPts=16,
                         PMLρ=0.5, PMLz_bot=0.5, PMLz_top=0.5,
                         padρ = 0.5, padz_bot = 0.5, padz_top = 0.5,
                         stretch_ratio_Δρ = 1.15, stretch_ratio_Δz_bot = 1.15, stretch_ratio_Δz_top = 1.15,
                         max_stretch_Δρ = 0.0, max_stretch_Δz_bot = 0.0, max_stretch_Δz_top = 0.0)
 
     target_Δρ, target_Δz = suggest_Δ(geometry, λ, λPts, geoPts)
-    # pad+PML regions are capped by their own material (wafer below, cladding above) at padPts per λ
+    # pad+PML regions are capped by their own material (wafer below, cladding above) at 2/3 of
+    # λPts per local wavelength, so they refine together with the rest of the grid
     n_bot = real(geometry.stack.wafer.n)
     n_top = real(geometry.trench.n)
     max_Δρ_limit = iszero(max_stretch_Δρ) ? 3*target_Δρ : max_stretch_Δρ
-    max_Δz_bot_limit = iszero(max_stretch_Δz_bot) ? min(3*target_Δz, λ / (n_bot * padPts)) : max_stretch_Δz_bot
-    max_Δz_top_limit = iszero(max_stretch_Δz_top) ? min(3*target_Δz, λ / (n_top * padPts)) : max_stretch_Δz_top
+    max_Δz_bot_limit = iszero(max_stretch_Δz_bot) ? min(3*target_Δz, 1.5λ / (n_bot * λPts)) : max_stretch_Δz_bot
+    max_Δz_top_limit = iszero(max_stretch_Δz_top) ? min(3*target_Δz, 1.5λ / (n_top * λPts)) : max_stretch_Δz_top
 
     vector_Δρ = Float64[]
     pixelate!(v, w) = append!(v, fill(w / max(1, ceil(Int, w/target_Δρ)),

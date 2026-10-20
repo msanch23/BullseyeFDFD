@@ -7,7 +7,8 @@ using LinearAlgebra
 # Shared fixture: the sanchezBullseye reference case (matches examples/).
 # Legacy hand-verified grid for these params was Nρ=1806, Nz=204; the
 # stretch_grid sliver-merge + fill_layer→stretch_grid changes gave 1805/202,
-# and the material-aware substrate/wafer z mesh (fit_layer, padPts) gives 1805/223.
+# the material-aware substrate/wafer z mesh (fit_layer) gave 1805/223, and tying
+# the pad cap to λPts (1.5λ/(n·λPts)) gives 1805/248.
 # ---------------------------------------------------------------------------
 const nClad = 1.00
 const nSiN  = 2.01066
@@ -122,8 +123,8 @@ const grid = conformal_grid(geom, λ; gridkw...)
     # update the numbers when you do. A silent change here means a bug.
     @testset "conformal_grid — characterization (cell counts)" begin
         @test grid.Nρ == 1805
-        @test grid.Nz == 223
-        @test grid.N  == 402515
+        @test grid.Nz == 248
+        @test grid.N  == 447640
     end
 
     # The substrate grades down to the wafer's λ/(n·λPts) at the interface and the wafer starts
@@ -135,7 +136,7 @@ const grid = conformal_grid(geom, λ; gridkw...)
         @test grid.zp[i] ≈ z_if                     # interface on a cell edge
         @test grid.Δzp[i]   ≈ Δw                    # last SiO2 cell
         @test grid.Δzp[i-1] ≈ Δw                    # first Si cell
-        @test all(grid.Δzp[2:i-1] .≤ λ / (real(nSi) * 16) + 1e-12)   # wafer cap λ/(n·padPts)
+        @test all(grid.Δzp[2:i-1] .≤ 1.5λ / (real(nSi) * gridkw.λPts) + 1e-12)   # wafer cap 1.5λ/(n·λPts)
         for dt in (-2e-4, 2e-4)                     # no remainder flip under a small tSiO2 change
             gt = conformal_grid(build_geometry(design, [(n = nSiO2, height = tSiO2 + dt), (n = nSi, height = Inf)],
                                                nClad, nSiN, tCBG), λ; gridkw...)
@@ -143,14 +144,15 @@ const grid = conformal_grid(geom, λ; gridkw...)
         end
     end
 
-    # Top pad mirrors the bottom: capped by the cladding's λ/(n·padPts). A SiO2 cladding at
+    # Top pad mirrors the bottom: capped by the cladding's 1.5λ/(n·λPts). A SiO2 cladding at
     # geoPts 8 makes that cap bind (3·target_Δz is coarser there).
     @testset "conformal_grid — material-aware top pad" begin
         gc  = build_geometry(design, substrates, nSiO2, nSiN, tCBG)
         grc = conformal_grid(gc, λ; gridkw..., λPts = 24, geoPts = 8)
         top = grc.Δzp[grc.idx_cbg_top+1:end-1]      # the last cell may absorb stretch_grid's remainder
-        @test maximum(top) ≤ λ / (nSiO2 * 16) + 1e-12
-        @test maximum(top) > 0.99 * λ / (nSiO2 * 16)
+        cap = 1.5λ / (nSiO2 * 24)
+        @test maximum(top) ≤ cap + 1e-12
+        @test maximum(top) > 0.99 * cap
     end
 
     @testset "fit_layer" begin
