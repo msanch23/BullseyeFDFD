@@ -540,4 +540,49 @@ const grid = conformal_grid(geom, λ; gridkw...)
         md = sc.modes[1]
         @test BullseyeFDFD._flux_terms(md, gsolve, sc.Ce).top_frac ≈ md.P_top / md.P_total  rtol=1e-12
     end
+
+    # -- adjoint ------------------------------------------------------------
+    # _reciprocity_weight mirrors CeChOperators: W·Ch·Ce is complex-symmetric, so the left eigenvector
+    # of A = ε⁻¹·Ch·Ce is W·ε·x. The residual catches drift if either side changes.
+    @testset "CeChOperators ↔ _reciprocity_weight (left eigenvector)" begin
+        for m in (1, -1)
+            Ce, Ch = CeChOperators(gsolve, λ; m)
+            iϵ, iμ = BullseyeFDFD.material_tensors(εsolve, gsolve)
+            A  = iϵ * Ch * iμ * Ce
+            md = first(BullseyeFDFD._solve_eig(A, gsolve, λ, 1, 1e-10, 3000))
+            W  = BullseyeFDFD._reciprocity_weight(gsolve, λ; m)
+            y  = BullseyeFDFD._left_eigvec(W, A, iϵ, md.raw_E, md.k_sq, gsolve)
+            @test norm(A' * y .- conj(md.k_sq) .* y) / abs(md.k_sq) < 1e-8
+        end
+    end
+
+    # Adjoint vs central finite differences on the frozen grid, for a width (eye) and a thickness (tCBG):
+    # dk² (eigenvalue path), V (tracking box) and η (far field + flux, field path).
+    @testset "adjoint gradients vs finite differences" begin
+        B  = BullseyeFDFD; NA = 0.4
+        gk = (; λPts=10, geoPts=6, PMLρ=0.3, PMLz_bot=0.3, PMLz_top=0.3, padρ=0.3, padz_bot=0.3, padz_top=0.3)
+        p0 = [design; tCBG]; it = length(p0)
+        g, M, εof, Ce, W = B._adjoint_setup(p0, substrates, nClad, nSiN, tCBG, false, λ, 1, gk;
+                                            tspec=B._thickness_spec((; tCBG=(0.15, 0.22)), substrates))
+        top(p) = g.cbg_bot + p[it]
+        solve(p) = (ϵ = εof(p); iϵ = B.material_tensors(ϵ, g)[1]; A = iϵ * M;
+                    (B._solve_eig(A, g, λ, 10, 1e-12, 3000), ϵ, iϵ, A))
+        raw, ϵ, iϵ, A = solve(p0)
+        md = B._select_mode(raw, λ; grid=g, inv_ϵr=iϵ)
+        F  = B._shifted_lu(A, md.k_sq)
+        dk2, y, b = B._dk2_dp(p0, md, g, A, iϵ, M, εof, W)
+        ∇V, _ = B._dV_dp(p0, md, g, ϵ, iϵ, εof, A, F, y, b, dk2; top=top(p0), it)
+        ∇η, _ = B._dη_dp(p0, md, g, iϵ, εof, A, F, y, b, dk2, Ce; NA)
+        function obs(p)                                     # track the base mode by eigenvalue
+            raw, ϵ, iϵ, _ = solve(p); m = argmin(r -> abs(r.k_sq - md.k_sq), raw)
+            (m.k_sq, B._V_terms(m, g, ϵ, iϵ; top=top(p)).Veff, B.analyze_collection(m, g, Ce; NA).η)
+        end
+        for k in (1, it)
+            δ = 1e-6; pp = copy(p0); pp[k] += δ; pm = copy(p0); pm[k] -= δ
+            (kp, Vp, ηp), (km, Vm, ηm) = obs(pp), obs(pm)
+            @test isapprox(dk2[k], (kp - km)/2δ; rtol=1e-4)
+            @test isapprox(∇V[k],  (Vp - Vm)/2δ; rtol=1e-4)
+            @test isapprox(∇η[k],  (ηp - ηm)/2δ; rtol=1e-4)
+        end
+    end
 end
