@@ -274,7 +274,7 @@ function calc_flux(grid, mode, Ce;
         Sz = 0.5 .* real.(Eρ_line .* conj.(Hϕ_line) .- Eϕ_line .* conj.(Hρ_line))
         flux = 0.0
         for i in 1:max_r_idx
-            flux += Sz[i] * 2π * grid.ρd[i] * grid.Δρd[i]
+            flux += Sz[i] * π * (grid.ρp[i+1]^2 - grid.ρp[i]^2)
         end
         return flux
     end
@@ -283,14 +283,14 @@ function calc_flux(grid, mode, Ce;
     P_bot = integrate_vertical_flux(idx_bot, idx_ρ - 1)
 
     R_wall = grid.ρp[idx_ρ]; P_ρ = 0.0
-    for z_idx in idx_bot:idx_top
+    for z_idx in idx_bot:idx_top-1
         Ez_val = mode.Ez[idx_ρ, z_idx]
         Eϕ_val = 0.5 * (mode.Eϕ[idx_ρ, z_idx] + mode.Eϕ[idx_ρ, min(grid.Nz, z_idx+1)])
         Hz_val = 0.25 * (Hz[idx_ρ-1, z_idx] + Hz[idx_ρ, z_idx] +
                          Hz[idx_ρ-1, min(grid.Nz, z_idx+1)] + Hz[idx_ρ, min(grid.Nz, z_idx+1)])
         Hϕ_val = 0.5 * (Hϕ[idx_ρ-1, z_idx] + Hϕ[idx_ρ, z_idx])
         Sρ = 0.5 * real(Eϕ_val * conj(Hz_val) - Ez_val * conj(Hϕ_val))
-        P_ρ += Sρ * grid.Δzd[z_idx] * 2π * R_wall
+        P_ρ += Sρ * grid.Δzp[z_idx] * 2π * R_wall
     end
 
     P_total = P_top - P_bot + P_ρ

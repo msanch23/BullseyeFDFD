@@ -258,13 +258,13 @@ function _flux_terms(mode, grid, Ce)
         Eρl = Eρ[1:max_r,z]; Eϕl = avg(Eϕ[1:max_r+1,z])
         Hϕl = 0.5 .* (Hϕ[1:max_r,z-1] .+ Hϕ[1:max_r,z]); Hρl = avg(0.5 .* (Hρ[:,z-1] .+ Hρ[:,z])[1:max_r+1])
         Sz = 0.5 .* real.(Eρl.*conj.(Hϕl) .- Eϕl.*conj.(Hρl))
-        s = 0.0; for i in 1:max_r; s += Sz[i]*2π*grid.ρd[i]*grid.Δρd[i]; end; s
+        s = 0.0; for i in 1:max_r; s += Sz[i]*π*(grid.ρp[i+1]^2-grid.ρp[i]^2); end; s
     end
     P_top = vflux(itop); P_bot = vflux(ibot); R_wall = grid.ρp[iρ]; P_ρ = 0.0
-    for z in ibot:itop
+    for z in ibot:itop-1
         zn = min(grid.Nz,z+1); Ez_v = Ez[iρ,z]; Eϕ_v = 0.5*(Eϕ[iρ,z]+Eϕ[iρ,zn])
         Hz_v = 0.25*(Hz[iρ-1,z]+Hz[iρ,z]+Hz[iρ-1,zn]+Hz[iρ,zn]); Hϕ_v = 0.5*(Hϕ[iρ-1,z]+Hϕ[iρ,z])
-        P_ρ += 0.5*real(Eϕ_v*conj(Hz_v)-Ez_v*conj(Hϕ_v)) * grid.Δzd[z]*2π*R_wall
+        P_ρ += 0.5*real(Eϕ_v*conj(Hz_v)-Ez_v*conj(Hϕ_v)) * grid.Δzp[z]*2π*R_wall
     end
     P_total = P_top-P_bot+P_ρ
     return (; P_top, P_bot, P_ρ, P_total, top_frac=P_top/P_total,
@@ -280,7 +280,7 @@ function _dtopfrac_de(fx, grid, Ce)
         Eρl = fx.Eρ[1:max_r,z]; Eϕl = avg(fx.Eϕ[1:max_r+1,z])
         Hϕl = 0.5 .* (fx.Hϕ[1:max_r,z-1] .+ fx.Hϕ[1:max_r,z]); Hρl = avg(0.5 .* (fx.Hρ[:,z-1] .+ fx.Hρ[:,z])[1:max_r+1])
         for i in 1:max_r
-            coeff = dfdP*2π*grid.ρd[i]*grid.Δρd[i]
+            coeff = dfdP*π*(grid.ρp[i+1]^2-grid.ρp[i]^2)
             dEρv = 0.25*conj(Hϕl[i])*coeff; dEϕv = -0.25*conj(Hρl[i])*coeff
             dHϕv = 0.25*conj(Eρl[i])*coeff; dHρv = -0.25*conj(Eϕl[i])*coeff
             dEρ[i,z] += dEρv; dEϕ[i,z] += 0.5*dEϕv; dEϕ[i+1,z] += 0.5*dEϕv
@@ -288,8 +288,8 @@ function _dtopfrac_de(fx, grid, Ce)
             dHρ[i,z-1] += 0.25*dHρv; dHρ[i,z] += 0.25*dHρv; dHρ[i+1,z-1] += 0.25*dHρv; dHρ[i+1,z] += 0.25*dHρv
         end
     end
-    for z in fx.ibot:fx.itop
-        zn = min(grid.Nz,z+1); coeff = (-tf/Pt)*grid.Δzd[z]*2π*fx.R_wall
+    for z in fx.ibot:fx.itop-1
+        zn = min(grid.Nz,z+1); coeff = (-tf/Pt)*grid.Δzp[z]*2π*fx.R_wall
         Eϕ_v = 0.5*(fx.Eϕ[iρ,z]+fx.Eϕ[iρ,zn]); Ez_v = fx.Ez[iρ,z]
         Hz_v = 0.25*(fx.Hz[iρ-1,z]+fx.Hz[iρ,z]+fx.Hz[iρ-1,zn]+fx.Hz[iρ,zn]); Hϕ_v = 0.5*(fx.Hϕ[iρ-1,z]+fx.Hϕ[iρ,z])
         dEϕv = 0.25*conj(Hz_v)*coeff; dEzv = -0.25*conj(Hϕ_v)*coeff

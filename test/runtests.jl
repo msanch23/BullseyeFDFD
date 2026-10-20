@@ -488,4 +488,26 @@ const grid = conformal_grid(geom, λ; gridkw...)
         mir = (; md..., m=-1, Eϕ=-md.Eϕ, raw_E=[md.raw_E[1:n]; -md.raw_E[n+1:2n]; md.raw_E[2n+1:3n]])
         @test calc_farfield(gsolve, mir, CeChOperators(gsolve, λ; m=-1)[1]; m=-1, resolution=7)[2] ≈ I  rtol=1e-10
     end
+
+    # Uniform Eρ = Ez = 1 with Hϕ = h (H built through a stand-in Ce) gives Sz = Re(h)/2 and
+    # Sρ = −Re(h)/2 everywhere, so the planes must return Sz·πR² and the wall Sρ·2πR·(z_top − z_bot)
+    # exactly: the box faces tile the closed surface. The adjoint's copy must match calc_flux.
+    @testset "calc_flux — box faces tile the surface; adjoint copy matches" begin
+        n, h, Z0 = gsolve.N, 0.7 - 0.2im, 376.73
+        raw_E = [ones(ComplexF64, n); zeros(ComplexF64, n); ones(ComplexF64, n)]
+        f  = (; λ=1.0, raw_E, Eρ=reshape(raw_E[1:n], gsolve.Nρ, gsolve.Nz),
+                Eϕ=reshape(raw_E[n+1:2n], gsolve.Nρ, gsolve.Nz), Ez=reshape(raw_E[2n+1:3n], gsolve.Nρ, gsolve.Nz))
+        Ce = sparse(n .+ (1:n), 1:n, fill(-1im*Z0*2π*h, n), 3n, 3n)   # (Ce·E)ϕ = −iZ₀k₀h ⇒ Hϕ = h
+        P_total, P_top, P_ρ, P_bot = calc_flux(gsolve, f, Ce; report=false)
+        mon = BullseyeFDFD.default_monitors(gsolve)
+        R   = gsolve.ρp[argmin(abs.(gsolve.ρd .- mon.right))]
+        Hb  = gsolve.zp[argmin(abs.(gsolve.zp .- mon.top))] - gsolve.zp[argmin(abs.(gsolve.zp .- mon.bot))]
+        @test P_top ≈ real(h)/2 * π * R^2  rtol=1e-12
+        @test P_bot ≈ P_top                rtol=1e-12
+        @test P_ρ   ≈ -real(h)/2 * 2π * R * Hb  rtol=1e-12
+
+        sc = solve_sim(gsolve, εsolve, λ, 0.4; Nmodes=1, report=false, plots=false)
+        md = sc.modes[1]
+        @test BullseyeFDFD._flux_terms(md, gsolve, sc.Ce).top_frac ≈ md.P_top / md.P_total  rtol=1e-12
+    end
 end
