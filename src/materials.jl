@@ -10,10 +10,11 @@ _Pz(x, a, b) = x <= a ? 0.0 : x >= b ? (b - a)/2 + (x - b) : (x - a)^2 / (2(b - 
 
 _below(G, P, x, a, b, w) = w == 0 ? G(x, a, b) : (P(x + w/2, a, b) - P(x - w/2, a, b)) / w
 
+# w: one ramp width for every interface, or one per interface
 function _fractions(G, P, (a, b), interfaces, w)
     f = Vector{Float64}(undef, length(interfaces) + 1); prev = 0.0
     for k in eachindex(interfaces)
-        g = _below(G, P, interfaces[k], a, b, w); f[k] = g - prev; prev = g
+        g = _below(G, P, interfaces[k], a, b, w isa Number ? w : w[k]); f[k] = g - prev; prev = g
     end
     f[end] = 1 - prev
     return f
@@ -64,19 +65,31 @@ end
 
 _compose(lay, band) = [lay[j][1] + lay[j][2] * band[i] for i in eachindex(band), j in eachindex(lay)]
 
-# Ramp widths: the smallest cell an interface can occupy, so each voxel's kernel is a hat (w = Δ)
-# or a trapezoid (w < Δ) and never reaches past the neighbouring voxel. Depends on the grid only,
-# so it stays fixed while the design moves on a frozen grid.
-_default_ramp(grid) = (minimum(grid.Δρp[grid.ρd .< grid.total_cbg_radius]),
-                       minimum(grid.Δzp[grid.PMLz_bot .< grid.zd .< grid.cbg_top]))
+# Ramp widths, from the grid only so they stay fixed while the design moves on a frozen grid.
+# ρ walls: the smallest device cell. Slab walls (cbg_bot, cbg_top): the smallest of the slab cells
+# and the cells touching them. Substrate walls: the smallest cell between the bottom PML and the
+# slab. Each voxel's kernel is then a hat (w = Δ) or a trapezoid (w < Δ) and never reaches past the
+# neighbouring voxel, and the slab's walls no longer depend on the wafer's cell size.
+function _default_ramp(grid)
+    slab  = minimum(grid.Δzp[max(grid.idx_cbg_bot - 1, 1):min(grid.idx_cbg_top + 1, grid.Nz)])
+    below = grid.PMLz_bot .< grid.zd .< grid.cbg_bot
+    return (ρ = minimum(grid.Δρp[grid.ρd .< grid.total_cbg_radius]), slab,
+            substrate = any(below) ? minimum(grid.Δzp[below]) : slab)
+end
+
+# ramp = (; ρ, slab, substrate), or (wρ, wz) with one width for every z wall (e.g. (0, 0): sharp)
+_ramp_widths(r::NamedTuple)            = (r.ρ, r.slab, r.substrate)
+_ramp_widths((wρ, wz)::Tuple{Real,Real}) = (wρ, wz, wz)
 
 # cell: sharp cell-averaged map (geometry, plotting). ρρ, ϕϕ, zz: ε at the Eρ, Eϕ, Ez Yee nodes,
 # each averaged over that component's own voxel with ramped walls, harmonic across a wall for the
 # normal component and arithmetic for the tangential ones.
 function build_epsilon(geometry, grid; ramp = _default_ramp(grid))
-    wρ, wz = ramp
+    wρ, w_slab, w_sub = _ramp_widths(ramp)
     ρ_interfaces, eps_seg        = _radial_profile(geometry)
     z_interfaces, eps_lay, iband = _vertical_profile(geometry, grid)
+    nz = length(z_interfaces)                   # the last two z walls are the slab's
+    wz = [k <= nz - 2 ? w_sub : w_slab for k in 1:nz]
 
     ρ_cell = [(grid.ρp[i], grid.ρp[i+1]) for i in 1:grid.Nρ]
     ρ_node = [(i == 1 ? 0.0 : grid.ρd[i-1], grid.ρd[i]) for i in 1:grid.Nρ]

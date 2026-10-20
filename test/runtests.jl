@@ -275,6 +275,26 @@ const grid = conformal_grid(geom, λ; gridkw...)
         @test maximum(abs.(R .- L)) > 0.1 * maximum(abs.(R))
     end
 
+    # Default ramp widths come from the frozen grid. On the default mesh every z wall has equal
+    # cells on both sides, and each wall gets exactly its own cell (a hat kernel). The slab's walls
+    # no longer take the substrate/wafer cell, which made them depend on the wafer index.
+    @testset "build_epsilon — default ramp widths" begin
+        gd = conformal_grid(geom, λ)                            # default 24/16 mesh
+        r  = BullseyeFDFD._default_ramp(gd)
+        jb, jt = gd.idx_cbg_bot, gd.idx_cbg_top
+        js = argmin(abs.(gd.zp .- (gd.cbg_bot - tSiO2)))        # node of the SiO2/Si wall
+        @test r.slab ≈ gd.Δzp[jt] ≈ gd.Δzp[jt+1] ≈ gd.Δzp[jb-1] # slab walls: their own cell
+        @test r.substrate ≈ gd.Δzp[js-1] ≈ gd.Δzp[js]           # SiO2/Si wall: its own cell
+        @test r.substrate < r.slab                              # one shared width gave the slab this
+        gq = conformal_grid(build_geometry(design, [(n = nSiO2, height = tSiO2), (n = nSiO2, height = Inf)],
+                                           nClad, nSiN, tCBG), λ)  # same stack on a SiO2 wafer
+        @test BullseyeFDFD._default_ramp(gq).slab == r.slab      # slab walls ignore the wafer index
+        # the legacy pair (wρ, wz) means one width for every z wall
+        e2 = build_epsilon(geom, grid; ramp = (r.ρ, r.slab))
+        e3 = build_epsilon(geom, grid; ramp = (ρ = r.ρ, slab = r.slab, substrate = r.slab))
+        @test all(getfield(e2, f) == getfield(e3, f) for f in keys(e2))
+    end
+
     # -- operators: CeChOperators ------------------------------------------
     # A full-size smoke test, then structural/analytic checks on small grids
     # where slicing the 3N×3N blocks is cheap. The block layout is
