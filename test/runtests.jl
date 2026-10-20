@@ -429,6 +429,12 @@ const grid = conformal_grid(geom, λ; gridkw...)
         @test_throws ErrorException BullseyeFDFD._check_source((; pol=:z), 1)
     end
 
+    @testset "m = 1 only (v0.6 guard)" begin
+        @test_throws ErrorException solve_sim(gsolve, εsolve, λ; Nmodes=1, m=0,  report=false, plots=false)
+        @test_throws ErrorException solve_sim(gsolve, εsolve, λ; Nmodes=1, m=-1, report=false, plots=false)
+        @test_throws ErrorException adj_opt(design, [λ_target(λ)]; substrates, nClad, nCBG=nSiN, tCBG, m=0)
+    end
+
     @testset "solve_sim — eigenmodes" begin
         sim = solve_sim(gsolve, εsolve, λ; Nmodes=2, report=false, plots=false)
         @test length(sim.modes) == 2

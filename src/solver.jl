@@ -65,6 +65,7 @@ function solve_sim(grid, ϵ, λ, NA=nothing;
                    select=nothing, report=true, purcell=true, plots = true,
                    tol=1e-6, maxiter=3000, pml_kwargs...)
     @assert Nmodes !== nothing || source !== nothing "provide Nmodes and/or source"
+    m == 1 || error("solve_sim supports m = 1 only in this version (got m = $m)")
     source === nothing || _check_source(source, m)
 
     A, inv_ϵr, Ce = _assemble(grid, ϵ, λ; m=m, pml_kwargs...)

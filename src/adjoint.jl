@@ -404,6 +404,7 @@ function adj_opt(seed_design, FOMs;
                                          x_abstol=1e-3, f_reltol=1e-4,
                                          show_trace=true))
 
+    m == 1 || error("adj_opt supports m = 1 only in this version (got m = $m)")
     tspec = _thickness_spec(thickness, substrates)
     nw    = length(seed_design)
     p0    = [seed_design; Float64[s === :tCBG ? tCBG : substrates[i].height for (s, i) in tspec]]
