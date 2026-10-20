@@ -86,17 +86,37 @@ function stretch_grid(L, Δ, stretch_ratio, max_stretch_Δ)
     return stretched_Δ
 end;
 
+# Grade from Δ_near up to max_Δ, optionally grade back down to Δ_far at the far side, and fill
+# the middle with uniform cells ≤ max_Δ. Unlike stretch_grid there is no remainder cell, so the
+# interface below a layer never gets an oversize cell.
+function fit_layer(L, Δ_near, Δ_far, stretch_ratio, max_Δ)
+    @assert stretch_ratio > 1 && max_Δ > 0 "fit_layer needs stretch_ratio > 1 and positive max_Δ"
+    grade(Δ) = (g = Float64[]; while Δ < max_Δ; push!(g, Δ); Δ *= stretch_ratio; end; g)
+    near = grade(min(Δ_near, max_Δ))
+    far  = isnothing(Δ_far) ? Float64[] : reverse(grade(min(Δ_far, max_Δ)))
+    rest = L - sum(near) - sum(far)
+    if rest < max_Δ                   # too thin to grade: uniform at the finest end size
+        n = ceil(Int, L / min(Δ_near, something(Δ_far, Inf), max_Δ))
+        return fill(L / n, n)
+    end
+    n = ceil(Int, rest / max_Δ)
+    return vcat(near, fill(rest / n, n), far)
+end;
+
 function conformal_grid(geometry, λ;
-                        λPts=24, geoPts=16,
+                        λPts=24, geoPts=16, padPts=16,
                         PMLρ=0.5, PMLz_bot=0.5, PMLz_top=0.5,
                         padρ = 0.5, padz_bot = 0.5, padz_top = 0.5,
                         stretch_ratio_Δρ = 1.15, stretch_ratio_Δz_bot = 1.15, stretch_ratio_Δz_top = 1.15,
                         max_stretch_Δρ = 0.0, max_stretch_Δz_bot = 0.0, max_stretch_Δz_top = 0.0)
 
     target_Δρ, target_Δz = suggest_Δ(geometry, λ, λPts, geoPts)
+    # pad+PML regions are capped by their own material (wafer below, cladding above) at padPts per λ
+    n_bot = real(geometry.stack.wafer.n)
+    n_top = real(geometry.trench.n)
     max_Δρ_limit = iszero(max_stretch_Δρ) ? 3*target_Δρ : max_stretch_Δρ
-    max_Δz_bot_limit = iszero(max_stretch_Δz_bot) ? 3*target_Δz : max_stretch_Δz_bot
-    max_Δz_top_limit = iszero(max_stretch_Δz_top) ? 3*target_Δz : max_stretch_Δz_top
+    max_Δz_bot_limit = iszero(max_stretch_Δz_bot) ? min(3*target_Δz, λ / (n_bot * padPts)) : max_stretch_Δz_bot
+    max_Δz_top_limit = iszero(max_stretch_Δz_top) ? min(3*target_Δz, λ / (n_top * padPts)) : max_stretch_Δz_top
 
     vector_Δρ = Float64[]
     pixelate!(v, w) = append!(v, fill(w / max(1, ceil(Int, w/target_Δρ)),
@@ -131,16 +151,20 @@ function conformal_grid(geometry, λ;
     vector_bot_Δz = Float64[]
     finite_substrates = Base.front(geometry.stack) 
 
-    for sub in finite_substrates
+    wafer_Δz = λ / (n_bot * λPts)
+
+    for (k, sub) in enumerate(finite_substrates)
         sub_Δz_target = λ / (real(sub.n) * λPts)
+        next_Δz = k < length(finite_substrates) ? λ / (real(finite_substrates[k+1].n) * λPts) : wafer_Δz
         start_Δ = isempty(vector_bot_Δz) ? vector_bullseye_Δz[end] : vector_bot_Δz[1]
-        cells = stretch_grid(sub.height, start_Δ, stretch_ratio_Δz_bot, sub_Δz_target)
+        cells = fit_layer(sub.height, start_Δ, next_Δz < sub_Δz_target ? next_Δz : nothing,
+                          stretch_ratio_Δz_bot, sub_Δz_target)
         prepend!(vector_bot_Δz, reverse(cells))
     end
 
     L_bot_remaining = padz_bot + PMLz_bot
     if L_bot_remaining > 0
-        start_Δ = isempty(vector_bot_Δz) ? target_Δz : vector_bot_Δz[1]
+        start_Δ = min(isempty(vector_bot_Δz) ? target_Δz : vector_bot_Δz[1], wafer_Δz, max_Δz_bot_limit)
         vec = stretch_grid(L_bot_remaining, start_Δ, stretch_ratio_Δz_bot, max_Δz_bot_limit)
         prepend!(vector_bot_Δz, reverse(vec))
     end
@@ -148,7 +172,8 @@ function conformal_grid(geometry, λ;
     vector_top_Δz = Float64[]
     L_top_total = padz_top + PMLz_top
     if L_top_total > 0
-        start_Δ = isempty(vector_bullseye_Δz) ? target_Δz : vector_bullseye_Δz[end]
+        clad_Δz = λ / (n_top * λPts)
+        start_Δ = min(isempty(vector_bullseye_Δz) ? target_Δz : vector_bullseye_Δz[end], clad_Δz, max_Δz_top_limit)
         vector_top_Δz = stretch_grid(L_top_total, start_Δ, stretch_ratio_Δz_top, max_Δz_top_limit)
     end
 
