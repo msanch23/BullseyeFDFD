@@ -260,11 +260,15 @@ const grid = conformal_grid(geom, λ; gridkw...)
                           padρ = 0.2, padz_bot = 0.2, padz_top = 0.2)
 
     @testset "CeChOperators — block structure" begin
-        N = gpml.N
+        N, Nρ, Nz = gpml.N, gpml.Nρ, gpml.Nz
         Ce, Ch = CeChOperators(gpml, λ; m = 1)
-        for B in (Ce, Ch), b in 0:2                 # the on-diagonal blocks are zero
-            @test iszero(B[b*N+1:(b+1)*N, b*N+1:(b+1)*N])
+        ax = [(j-1)*Nρ + 1 for j in 1:Nz]           # ρ = 0 rows within a block
+        for B in (Ce, Ch), b in 0:2                 # the on-diagonal blocks are zero ...
+            D = B[b*N+1:(b+1)*N, b*N+1:(b+1)*N]
+            B === Ch && b == 1 && (D = D[setdiff(1:N, ax), :])
+            @test iszero(D)
         end
+        @test !iszero(Ch[N .+ ax, N+1:2N])          # ... except Ch's axis Eϕ rows: Hρ(0) = i·m·Hϕ[1]
     end
 
     @testset "CeChOperators — azimuthal (m) coupling" begin
@@ -361,6 +365,26 @@ const grid = conformal_grid(geom, λ; gridkw...)
         @test all(x -> abs(x) < 1e-8, r[[(j-1)*Nρ + i for j in 1:Nz for i in 2:Nρ]])
     end
 
+    # ρ = 0 at |m| = 1: the axis Eϕ row is −i·m × the Eρ[1] row (Hρ(0) = i·m·Hϕ(0)) and the
+    # axis Hρ keeps −i·m·Ez[2]/ρp[2] (Seet A18), so no free 1D chain lives on the axis.
+    @testset "CeChOperators — ρ=0 axis regularity rows" begin
+        N, Nρ, Nz = gpml.N, gpml.Nρ, gpml.Nz
+        r0 = [(j-1)*Nρ + 1 for j in 1:Nz]           # Eρ[1] / Hρ(0) rows
+        rϕ = N .+ r0                                # Eϕ(0) rows
+        for m in (1, -1)
+            Ce, Ch = CeChOperators(gpml, λ; m)
+            @test Ch[rϕ, :] == -1im * m * Ch[r0, :]
+            @test all(j -> Ce[r0[j], 2N + r0[j] + 1] ≈ -1im * m / gpml.ρp[2], 1:Nz)
+            A = Ch * Ce                             # ε = μ = 1
+            @test iszero(A[setdiff(1:3N, rϕ), rϕ])  # nothing reads the axis Eϕ ...
+            @test iszero(A[rϕ, rϕ])                 # ... and it has no dynamics of its own
+        end
+        for m in (0, 2)
+            _, Ch = CeChOperators(gpml, λ; m)
+            @test iszero(Ch[rϕ, :])                 # Eϕ(0) = 0 for |m| ≠ 1
+        end
+    end
+
     # -- materials: Yee-staggered inverse tensors --------------------------
     @testset "material_tensors" begin
         invϵ, invμ = BullseyeFDFD.material_tensors(ε_ref, grid)
@@ -429,6 +453,12 @@ const grid = conformal_grid(geom, λ; gridkw...)
         sp = solve_sim(gsolve, εsolve, λ; Nmodes=1, source=dipole(gsolve),
                        purcell=true, report=false, plots=false)
         @test isfinite(sp.driven.Purcell) && sp.driven.Purcell > 0   # LDOS bulk ratio
+    end
+
+    @testset "solve_sim — driven axis Eϕ is regular (m=1)" begin
+        d = solve_sim(gsolve, εsolve, λ; source=dipole(gsolve),
+                      report=false, plots=false, purcell=false).driven
+        @test maximum(abs.(d.Eϕ[1, :] .+ 1im .* d.Eρ[1, :])) ≤ 1e-8 * maximum(abs, d.Eρ[1, :])
     end
 
     # Cavity modes keep ≲0.1 of their energy in the PML, PML/box modes ≳0.8. Among 8

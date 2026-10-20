@@ -80,9 +80,7 @@ function CeChOperators(grid::CylindricalGrid, λ; m=1, pml_kwargs...)
     Dρ_E = spdiagm(0 => -inv_Δρp, 1 => inv_Δρp[1:end-1])
 
     inv_Δρd = 1.0 ./ (grid.Δρd .* Sρp)
-    d0 = copy(inv_Δρd)
-    d0[1] *= 2.0
-    Dρ_H = spdiagm(0 => d0, -1 => -inv_Δρd[2:end])
+    Dρ_H = spdiagm(0 => inv_Δρd, -1 => -inv_Δρd[2:end])
 
     Iρ = sparse(I, grid.Nρ, grid.Nρ)
     Iz = sparse(I, grid.Nz, grid.Nz)
@@ -115,6 +113,19 @@ function CeChOperators(grid::CylindricalGrid, λ; m=1, pml_kwargs...)
     Ch = [ Z                -Dz_H_2D  -1im*m*inv_ρd_2D ;
            Dz_H_2D           Z        -Dρ_H_2D         ;
            1im*m*inv_ρp_2D   Dρ_ρH     Z               ]
+
+    # ρ = 0: axis Eϕ and Hρ feed nothing back (Seet et al. 2024, App. A2), so their rows
+    # encode regularity instead of a free 1D equation along z.
+    on_axis(b) = [b*grid.N + (j-1)*grid.Nρ + 1 for j in 1:grid.Nz]
+    keep = ones(ComplexF64, 3grid.N); keep[on_axis(1)] .= 0
+    Ch_ax = spdiagm(0 => keep) * Ch                                   # Eϕ(0) = 0 for |m| ≠ 1
+    if abs(m) == 1
+        # Eϕ(0) row: ∂zHρ − ∂ρHz with Hρ(0) = i·m·Hϕ(0)  ⇒  −i·m × the Eρ[1] row
+        Ch_ax += sparse(on_axis(1), on_axis(0), fill(-1.0im*m, grid.Nz), 3grid.N, 3grid.N) * Ch
+        # Hρ(0) keeps its m-term, Ez(0) = 0:  −i·m·Ez/ρ|₀ ≈ −i·m·Ez[2]/ρp[2]   (Seet A18)
+        Ce += sparse(on_axis(0), on_axis(2) .+ 1, fill(-1.0im*m/ρp_vec[2], grid.Nz), 3grid.N, 3grid.N)
+    end
+    Ch = dropzeros!(Ch_ax)
 
     return Ce, Ch
 end;
