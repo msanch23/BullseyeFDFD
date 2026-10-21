@@ -27,9 +27,7 @@ design = [0.037500, 0.300000,   # slot, eye
 λ0 = 0.7825;
 NA = 0.4;
 
-λ_penalty = FOMTerm(:λ, :penalty, λ -> (Δ = (λ - λ0)/0.005; (Δ^2, 2Δ/0.005)), "λ_penalty($λ0; σ=0.005)");
-
-FOMs = [λ_penalty, Q_target(78.25; w=50), V_target(:min), η_target(:max), ηG_target(:max)];
+FOMs = [λ_target(λ0; σ=0.005, kind=:penalty), Q_target(78.25; w=50), V_target(:min), η_target(:max), ηG_target(:max)];
 
 grid_kwargs = (; λPts=24, geoPts=8);
 opt_kwargs  = (; nClad, nCBG=nSiN, slotted=true, λ=λ0, NA,
