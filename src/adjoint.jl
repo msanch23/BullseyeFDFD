@@ -7,9 +7,12 @@ end
 
 _lorentz_gate(o0, σ) = o -> (Δ = o - o0;      G = 1/(1 + (Δ/σ)^2); (G, -2Δ/σ^2 * G^2))
 _sq_penalty(o0, w)   = o -> (Δ = (o - o0)/o0;                       (w*Δ^2, 2w*Δ/o0))
+_sq_dev(o0, σ)       = o -> (Δ = (o - o0)/σ;                        (Δ^2, 2Δ/σ))
 
-λ_target(λ0; σ=0.010) =
-    FOMTerm(:λ, :gate, _lorentz_gate(λ0, σ), "λ_target($λ0; σ=$σ)")
+λ_target(λ0; σ=0.010, kind=:gate) =
+    kind === :gate    ? FOMTerm(:λ, :gate,    _lorentz_gate(λ0, σ), "λ_target($λ0; σ=$σ)") :
+    kind === :penalty ? FOMTerm(:λ, :penalty, _sq_dev(λ0, σ),       "λ_target($λ0; σ=$σ, kind=:penalty)") :
+    throw(ArgumentError("λ_target: kind must be :gate or :penalty, got :$kind"))
 
 Q_target(spec; w=1.0) =
     spec === :max ? FOMTerm(:Q, :reward,  o -> (o, 1.0),               "Q_target(:max)") :
@@ -394,15 +397,16 @@ function _log_row(io, log_obs, n_eval, elapsed, J, ovals, x)
     flush(io)
 end
 
+_adj_options(iterations) = Optim.Options(; iterations, outer_iterations=10, x_abstol=1e-3,
+                                           f_reltol=1e-4, outer_f_reltol=1e-4, show_trace=true)
+
 function adj_opt(seed_design, FOMs;
                  substrates, nClad, nCBG, tCBG, slotted=false, thickness=(;),
                  λ=0.780, NA=nothing, lower=nothing, upper=nothing,
                  Nmodes=10, m=1, grid_kwargs=(;),
                  σ_sel=0.020, Qfloor=30.0, save_data=false,
                  iterations=50, linesearch=BackTracking(),
-                 options=Optim.Options(; iterations, outer_iterations=10,
-                                         x_abstol=1e-3, f_reltol=1e-4,
-                                         show_trace=true))
+                 options=_adj_options(iterations))
 
     m == 1 || error("adj_opt supports m = 1 only in this version (got m = $m)")
     tspec = _thickness_spec(thickness, substrates)

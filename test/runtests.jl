@@ -649,4 +649,24 @@ const grid = conformal_grid(geom, λ; gridkw...)
             @test isapprox(∇η[k],  (ηp - ηm)/2δ; rtol=1e-4)
         end
     end
+
+    # Every built-in FOM term's g returns (value, d value/d o); central FD checks the derivative.
+    # λ_target(kind=:penalty) enters J additively, so it holds λ against large penalty terms.
+    @testset "FOM terms — derivatives, λ penalty, default options" begin
+        terms = [(λ_target(λ), 0.781), (λ_target(λ; kind=:penalty, σ=0.005), 0.791),
+                 (Q_target(:max), 350.0), (Q_target(100.0; w=5), 350.0), (V_target(:min), 2.3), (V_target(1.5), 2.3),
+                 (Fp_target(:max), 12.0), (Fp_target(20.0), 12.0), (ηG_target(:max), 0.45), (ηG_target(0.8), 0.45),
+                 (η_target(:max), 0.18), (η_target(0.3), 0.18)]
+        for (t, o) in terms
+            h = 1e-6 * abs(o)
+            @test t.g(o)[2] ≈ (t.g(o + h)[1] - t.g(o - h)[1]) / 2h  rtol=1e-6
+        end
+        @test_throws ArgumentError λ_target(λ; kind=:linear)
+        J, dJ = BullseyeFDFD.evaluate_fom([λ_target(λ; kind=:penalty, σ=0.005), Q_target(:max)],
+                                          Dict(:λ => λ + 0.010, :Q => 300.0))
+        @test J ≈ -300.0 + (0.010/0.005)^2                      # penalty adds; the product is Q alone
+        @test dJ[:λ] ≈ 2 * (0.010/0.005) / 0.005 && dJ[:Q] ≈ -1.0
+        o = BullseyeFDFD._adj_options(37)                       # Fminbox's outer loop stops on outer_f_reltol
+        @test o.outer_f_reltol == 1e-4 && o.f_reltol == 1e-4 && o.iterations == 37
+    end
 end
