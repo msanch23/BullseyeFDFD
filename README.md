@@ -91,17 +91,20 @@ sim = solve_sim(grid, ϵ, λ0;
                 Nmodes=3);
 ```
 running it will produce the following table:
+<!-- readme:assets/readme/sanchez_eig.txt -->
 ```
 Eigenmode Analysis Report
-==================================================
-mode | λ (nm)  | Q      | V(λ/n)³ | Fp    | CF    
---------------------------------------------------
-1    | 780.00  | 354.4  | 2.2289  | 12.1  | 0.1276
-2    | 784.17  | 26.5   | 28.5741 | 0.1   | 0.0130
-3    | 776.85  | 25.7   | 20.4957 | 0.1   | 0.0184
-==================================================
+==========================================================
+mode | λ (nm)  | Q      | V(λ/n)³ | Fp    | CF     | PML  
+----------------------------------------------------------
+1    | 780.02  | 356.6  | 2.2295  | 12.2  | 0.1274 | 0.010
+2    | 784.21  | 26.6   | 35.5034 | 0.1   | 0.0095 | 0.894
+3    | 776.78  | 25.6   | 27.9905 | 0.1   | 0.0135 | 0.870
+==========================================================
 ```
+<!-- /readme:assets/readme/sanchez_eig.txt -->
 Note that `mode 1` is the fundamental mode, and `mode 2` & `mode 3` are spurious/leaky modes.
+Their λ and Q repeat, but their fields depend on the eigensolver's start vector, and ARPACK draws a new pseudo-random one for every solve in a Julia session. So their V, Fp, Gauss. and CF change between the tables below and can differ in your session; mode 1's don't.
 and if we specify a numerical aperture:
 ```julia
 NA = 0.4;
@@ -110,16 +113,18 @@ NA = 0.4;
                       Nmodes=3);
 ```
 columns are added for figure-of-merits involving the NA:
+<!-- readme:assets/readme/sanchez_eig_na.txt -->
 ```
 Eigenmode Analysis Report
-====================================================================
-mode | λ (nm)  | Q      | V(λ/n)³ | Fp    | η (%)  | Gauss. | CF    
---------------------------------------------------------------------
-1    | 780.00  | 354.4  | 2.2289  | 12.1  | 16.45  | 0.4891 | 0.1276
-2    | 784.17  | 26.5   | 33.2290 | 0.1   | 0.00   | 0.3412 | 0.0067
-3    | 776.85  | 25.7   | 23.8573 | 0.1   | 0.00   | 0.3585 | 0.0094
-====================================================================
+============================================================================
+mode | λ (nm)  | Q      | V(λ/n)³ | Fp    | η (%)  | Gauss. | CF     | PML  
+----------------------------------------------------------------------------
+1    | 780.02  | 356.6  | 2.2295  | 12.2  | 16.17  | 0.4803 | 0.1274 | 0.010
+2    | 784.21  | 26.6   | 13.1859 | 0.2   | 0.00   | 0.5041 | 0.0195 | 0.894
+3    | 776.78  | 25.6   | 8.8425  | 0.2   | 0.00   | 0.5037 | 0.0285 | 0.870
+============================================================================
 ```
+<!-- /readme:assets/readme/sanchez_eig_na.txt -->
 Plots of the electric field, far-field, and k-space are automatically generated.
 <p align="center">
   <img src="assets/eigenmode.png"       width="40%" alt="Eigenmode">
@@ -136,10 +141,12 @@ sim = solve_sim(grid, ϵ, λ0;
                       source=src);
 ```
 Running the solver produces the following lines:
+<!-- readme:assets/readme/sanchez_driven.txt -->
 ```
-Purcell factor = 6.339 @ 781.00 nm
-ρ polarized dipole @ (ρ,z): (2, 69)
+Purcell factor = 6.450 @ 781.00 nm
+ρ polarized dipole @ (ρ,z): (2, 123)
 ```
+<!-- /readme:assets/readme/sanchez_driven.txt -->
 A normalization simulation for the Purcell enhancement happens after the Bullseye-dipole simulation.
 
 #### Both eigenfrequency and driven dipole
@@ -151,19 +158,21 @@ src = dipole(grid);
                       Nmodes=3, source=src);
 ```
 which produces the following:
+<!-- readme:assets/readme/sanchez_eig_driven.txt -->
 ```
 Eigenmode Analysis Report
-====================================================================
-mode | λ (nm)  | Q      | V(λ/n)³ | Fp    | η (%)  | Gauss. | CF    
---------------------------------------------------------------------
-1    | 780.00  | 354.4  | 2.2289  | 12.1  | 16.45  | 0.4891 | 0.1276
-2    | 784.17  | 26.5   | 24.0908 | 0.1   | 0.00   | 0.7054 | 0.0141
-3    | 776.85  | 25.7   | 19.1814 | 0.1   | 0.00   | 0.6722 | 0.0206
-====================================================================
+============================================================================
+mode | λ (nm)  | Q      | V(λ/n)³ | Fp    | η (%)  | Gauss. | CF     | PML  
+----------------------------------------------------------------------------
+1    | 780.02  | 356.6  | 2.2295  | 12.2  | 16.17  | 0.4803 | 0.1274 | 0.010
+2    | 784.21  | 26.6   | 2.7450  | 0.7   | 0.00   | 0.4689 | 0.0053 | 0.894
+3    | 776.78  | 25.6   | 33.8040 | 0.1   | 0.00   | 0.4593 | 0.0118 | 0.870
+============================================================================
 
-Purcell factor = 10.393 @ 780.00 nm
-ρ polarized dipole @ (ρ,z): (2, 69)
+Purcell factor = 10.466 @ 780.02 nm
+ρ polarized dipole @ (ρ,z): (2, 123)
 ```
+<!-- /readme:assets/readme/sanchez_eig_driven.txt -->
 The returned `sim` carries both solves:
 ```julia
 sim.modes[1].Q         # eigenmode quantities (Q, V_eff, Fp, CF, η, gaussicity)
@@ -172,6 +181,48 @@ sim.driven.normE       # |E| of the driven field
 ```
 ### Optimization
 Shape optimization via adjoint eigenvalues and eigenvectors, and driven-dipole adjoint field currently under construction.
+
+## Validation
+### COMSOL
+<!-- readme:validation/comsol/results/summary.csv -->
+| Sweep | Quantity | Same-mode points | FDFD/COMSOL mean | FDFD/COMSOL std | Max. difference (%) | Correlation r |
+| --- | --- | --- | --- | --- | --- | --- |
+| rEye | λ (nm) | 9/10 | 0.9998 | 0.0000 | 0.03 | 1.0000 |
+| rEye | Q | 9/10 | 0.9750 | 0.0110 | 4.73 | 0.9999 |
+| rEye | V (λ/n)³ | 9/10 | 1.0158 | 0.0053 | 2.56 | 1.0000 |
+| rEye | Fp | 9/10 | 0.9599 | 0.0156 | 7.48 | 1.0000 |
+| rEye | CF | 9/10 | 0.9928 | 0.0072 | 2.69 | 1.0000 |
+| rEye | Ceff_NA | 9/10 | 1.0159 | 0.0154 | 3.78 | 0.9932 |
+| tCBG | λ (nm) | 9/9 | 0.9998 | 0.0000 | 0.02 | 1.0000 |
+| tCBG | Q | 9/9 | 0.9869 | 0.0023 | 1.54 | 0.9997 |
+| tCBG | V (λ/n)³ | 9/9 | 1.0124 | 0.0019 | 1.44 | 0.9994 |
+| tCBG | Fp | 9/9 | 0.9748 | 0.0022 | 2.87 | 0.9983 |
+| tCBG | CF | 9/9 | 0.9969 | 0.0020 | 0.56 | 0.9956 |
+| tCBG | Ceff_NA | 9/9 | 1.0036 | 0.0007 | 0.45 | 0.9994 |
+| tSiO2 | λ (nm) | 19/19 | 0.9998 | 0.0000 | 0.02 | 0.9986 |
+| tSiO2 | Q | 19/19 | 0.9908 | 0.0040 | 1.59 | 0.9992 |
+| tSiO2 | V (λ/n)³ | 19/19 | 1.0099 | 0.0026 | 1.38 | 0.9789 |
+| tSiO2 | Fp | 19/19 | 0.9811 | 0.0058 | 2.85 | 0.9979 |
+| tSiO2 | CF | 19/19 | 0.9989 | 0.0025 | 0.48 | 0.9930 |
+| tSiO2 | Ceff_NA | 19/19 | 0.9973 | 0.0106 | 2.29 | 0.9989 |
+
+*λPts: 36 · geoPts: 24*
+<!-- /readme:validation/comsol/results/summary.csv -->
+
+### Adjoint gradients
+<!-- readme:validation/adjoint/results/summary.csv -->
+| Observable | Median rel. error | Max. rel. error |
+| --- | --- | --- |
+| J | 6.6e-09 | 1.5e-07 |
+| λ | 3.3e-09 | 1.2e-06 |
+| Q | 7.3e-09 | 5.8e-08 |
+| V | 7.6e-09 | 4.6e-06 |
+| Fp | 6.1e-09 | 1.8e-06 |
+| ηG | 4.8e-08 | 3.9e-06 |
+| η | 3.1e-08 | 1.9e-06 |
+
+*Parameters: 24 · FD step δ: 1e-07 · λPts: 24 · geoPts: 8*
+<!-- /readme:validation/adjoint/results/summary.csv -->
 
 ## Testing
 BullseyeFDFD comes with a test suite for geometry, meshing, materials, curl operators, and both the eigenmode and driven solves.
