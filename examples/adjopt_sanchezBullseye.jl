@@ -31,7 +31,19 @@ design = [0.355000,             # eye
 λ0 = 0.780;
 
 FOMs = [λ_target(λ0), Q_target(:max)];
-res  = adj_opt(design, FOMs; substrates, nClad, nCBG=nSiN, tCBG, λ=λ0,
-               lower=fill(0.05, length(design)), upper=fill(1.00, length(design)),
-               thickness=(; tCBG=(0.15, 0.22), substrate1=(0.65, 0.85)),
-               Nmodes=10, iterations=50, grid_kwargs = (; λPts=20, geoPts=8));
+
+grid_kwargs = (; λPts=24, geoPts=8);
+opt_kwargs  = (; nClad, nCBG=nSiN, λ=λ0,
+                 lower=fill(0.05, length(design)), upper=fill(1.00, length(design)),
+                 thickness=(; tCBG=(0.15, 0.22), substrate1=(0.65, 0.85)),
+                 Nmodes=10, iterations=50, grid_kwargs,
+                 save_data=@__DIR__);
+
+res1 = adj_opt(design,      FOMs; substrates,      tCBG,      opt_kwargs...);
+res2 = adj_opt(res1.design, FOMs; res1.substrates, res1.tCBG, opt_kwargs...);
+res3 = adj_opt(res2.design, FOMs; res2.substrates, res2.tCBG, opt_kwargs...);
+
+geometry = build_geometry(res3.design, res3.substrates, nClad, nSiN, res3.tCBG);
+grid     = conformal_grid(geometry, λ0; λPts=36, geoPts=24);
+ϵ        = build_epsilon(geometry, grid);
+sim      = solve_sim(grid, ϵ, λ0; Nmodes=10);
