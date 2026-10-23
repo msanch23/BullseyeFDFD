@@ -669,4 +669,24 @@ const grid = conformal_grid(geom, λ; gridkw...)
         o = BullseyeFDFD._adj_options(37)                       # Fminbox's outer loop stops on outer_f_reltol
         @test o.outer_f_reltol == 1e-4 && o.f_reltol == 1e-4 && o.iterations == 37
     end
+
+    # Mode tracking: the overlap ignores scale and phase and separates orthogonal fields;
+    # _follow_mode picks the mode most like the reference and rejects a reference no mode resembles;
+    # _nearest_mode re-finds a mode from its (λ, Q), which is how a remeshed round picks it up.
+    @testset "mode tracking — overlap, following, and (λ, Q) hand-off" begin
+        B = BullseyeFDFD
+        a = ComplexF64[1, 2im, 0, 3]; b = ComplexF64[0, 0, 5, 0]; w = [1.0, 2.0, 0.5, 1.0]
+        @test B._overlap(a, (2 - 3im) .* a, w) ≈ 1
+        @test B._overlap(a, b, w) == 0
+        @test 0 < B._overlap(a, a .+ b, w) < 1
+        iϵ = B.material_tensors(εsolve, gsolve)[1]
+        Ce, Ch = CeChOperators(gsolve, λ)
+        raw = B._solve_eig(iϵ * Ch * Ce, gsolve, λ, 10, 1e-10, 3000)
+        md  = B._select_mode(raw, λ; grid=gsolve, inv_ϵr=iϵ)
+        @test B._nearest_mode(raw, (; λ = md.λ, Q = md.Q), 30.0, gsolve, iϵ) === md
+        w = abs.(B._reciprocity_weight(gsolve, λ))
+        @test B._follow_mode(raw, (1 + 2im) .* md.raw_E, w, 0.5, 30.0, gsolve, iϵ) === md
+        @test B._follow_mode(raw, randn(ComplexF64, length(md.raw_E)), w, 0.5, 30.0, gsolve, iϵ) === nothing
+        @test_throws ArgumentError adj_opt((; design = [0.1], substrates = [], tCBG = 0.1), []; tCBG = 0.2)
+    end
 end

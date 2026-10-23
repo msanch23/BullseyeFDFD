@@ -400,12 +400,36 @@ end
 _adj_options(iterations) = Optim.Options(; iterations, outer_iterations=10, x_abstol=1e-3,
                                            f_reltol=1e-4, outer_f_reltol=1e-4, show_trace=true)
 
+_overlap(a, b, w) = abs(sum(w .* a .* conj.(b))) / sqrt(sum(w .* abs2.(a)) * sum(w .* abs2.(b)))
+
+_valid_modes(raw, Qfloor, grid, inv_ϵr) = filter(m -> m.Q ≥ Qfloor && _pml_fraction(m, grid, inv_ϵr) ≤ 0.5, raw)
+
+function _nearest_mode(raw, ref, Qfloor, grid, inv_ϵr)
+    cand = _valid_modes(raw, Qfloor, grid, inv_ϵr)
+    isempty(cand) && return nothing
+    argmin(m -> ((m.λ - ref.λ)/0.001)^2 + ((m.Q - ref.Q)/(0.05*ref.Q))^2, cand)
+end
+
+function _follow_mode(raw, xref, w, track, Qfloor, grid, inv_ϵr)
+    cand = _valid_modes(raw, Qfloor, grid, inv_ϵr)
+    isempty(cand) && return nothing
+    o, i = findmax(m -> _overlap(m.raw_E, xref, w), cand)
+    return o ≥ track ? cand[i] : nothing
+end
+
+# Next remesh round: seed from a previous adj_opt result, which also carries the mode to follow.
+function adj_opt(prev::NamedTuple, FOMs; kwargs...)
+    (haskey(kwargs, :substrates) || haskey(kwargs, :tCBG)) &&
+        throw(ArgumentError("adj_opt(prev, …) takes substrates and tCBG from the previous result"))
+    return adj_opt(prev.design, FOMs; substrates = prev.substrates, tCBG = prev.tCBG, ref = prev, kwargs...)
+end
+
 function adj_opt(seed_design, FOMs;
                  substrates, nClad, nCBG, tCBG, slotted=false, thickness=(;),
                  λ=0.780, NA=nothing, lower=nothing, upper=nothing,
                  Nmodes=10, m=1, grid_kwargs=(;),
-                 σ_sel=0.020, Qfloor=30.0, save_data=false,
-                 iterations=50, linesearch=BackTracking(),
+                 σ_sel=0.020, Qfloor=30.0, track=0.5, ref=nothing, save_data=false,
+                 iterations=50, linesearch=BackTracking(), mu0=NaN,
                  options=_adj_options(iterations))
 
     m == 1 || error("adj_opt supports m = 1 only in this version (got m = $m)")
@@ -428,7 +452,13 @@ function adj_opt(seed_design, FOMs;
             error("tCBG upper bound reaches the top flux/far-field plane of the seed grid")
     end
 
-    log_obs  = [unique([t.observable for t in FOMs]); :pml_frac]
+    log_obs  = [unique([t.observable for t in FOMs]); :pml_frac;
+                track === nothing ? Symbol[] : [:overlap, :overlap_seed]]
+    refλQ    = ref === nothing ? nothing : hasproperty(ref, :mode) ? ref.mode : ref
+    wv       = abs.(W)
+    xseed    = Ref{Union{Nothing,Vector{ComplexF64}}}(nothing)   # mode at the seed
+    xref     = Ref{Union{Nothing,Vector{ComplexF64}}}(nothing)   # mode at the best point so far
+    best     = Ref{Any}(nothing)                                 # lowest-J evaluation: (; n, x, J, λ, Q)
     needs_V  = any(t.observable in (:V, :Fp) for t in FOMs)
     needs_ηG = any(t.observable === :ηG for t in FOMs)
     needs_η  = any(t.observable === :η  for t in FOMs)
@@ -439,9 +469,15 @@ function adj_opt(seed_design, FOMs;
             "substrates: " * join(["(n=$(s.n), h=$(s.height))" for s in substrates], "  "),
             "solve: grid_kwargs=$grid_kwargs  Nmodes=$Nmodes  m=$m",
             "FOM: " * join([t.label for t in FOMs], " · ")]
+    push!(meta, lower === nothing ? "bounds: none" :
+                "bounds: p1–p$nw lower=$(lower[1:nw])  upper=$(upper[1:nw])  (Fminbox mu0=$(isnan(mu0) ? "auto" : mu0))")
     isempty(tspec) || push!(meta, "thickness: " * join(("$s ∈ $b" for (s, b) in pairs(thickness)), "  "))
-    cols = [["p$i" for i in 1:nw]; [string(s) for (s, _) in tspec]]
-    logio, logpath = _open_log(save_data, p0, cols, log_obs, meta)
+    track === nothing || push!(meta, "track: highest overlap with the best point's mode, ≥ $track" *
+                                     (refλQ === nothing ? "" : "; seed mode nearest λ=$(refλQ.λ), Q=$(refλQ.Q)"))
+    nsub = length(substrates) - 1                                # finite layers; the last one is the wafer
+    cols = [["p$i" for i in 1:nw]; "tCBG"; ["substrate$i" for i in 1:nsub]]
+    row(x) = ((w, subs, tc) = _unpack(x, nw, tspec, substrates, tCBG); [w; tc; [s.height for s in subs[1:nsub]]])
+    logio, logpath = _open_log(save_data, row(p0), cols, log_obs, meta)
 
     cache_x = Ref(Float64[]); cache = Ref{Any}(nothing); n_eval = Ref(0)
     t_start = time()
@@ -453,17 +489,24 @@ function adj_opt(seed_design, FOMs;
             inv_ϵr = material_tensors(ϵ, grid)[1]
             A      = inv_ϵr * M
             raw = _solve_eig(A, grid, λ, Nmodes, 1e-6, 3000)
-            rm  = _select_mode(raw, λ, σ_sel; Qfloor, grid, inv_ϵr)
+            rm  = if track === nothing || (xref[] === nothing && refλQ === nothing)
+                      _select_mode(raw, λ, σ_sel; Qfloor, grid, inv_ϵr)
+                  elseif xref[] === nothing                  # seed of a later round: the previous round's mode
+                      _nearest_mode(raw, refλQ, Qfloor, grid, inv_ϵr)
+                  else
+                      _follow_mode(raw, xref[], wv, track, Qfloor, grid, inv_ϵr)
+                  end
             if rm === nothing
-                @printf("[%3d] no valid mode (none with Q≥%.0f and PML fraction ≤0.5)  ‖Δp‖=%.3f\n",
-                        n_eval[], Qfloor, norm(x .- p0))
+                @printf("[%3d] no valid mode (none with Q≥%.0f, PML fraction ≤0.5%s)  ‖Δp‖=%.3f\n",
+                        n_eval[], Qfloor, xref[] === nothing ? "" : ", overlap ≥ $track", norm(x .- p0))
                 for (i, md) in enumerate(raw)
-                    @printf("        raw %d: λ=%.1f nm  Q=%.1f  PML %.2f\n", i, md.λ*1000, md.Q,
-                            _pml_fraction(md, grid, inv_ϵr))
+                    @printf("        raw %d: λ=%.1f nm  Q=%.1f  PML %.2f%s\n", i, md.λ*1000, md.Q,
+                            _pml_fraction(md, grid, inv_ϵr),
+                            xref[] === nothing ? "" : @sprintf("  overlap %.2f", _overlap(md.raw_E, xref[], wv)))
                 end
                 n_eval[] == 1 && error("adj_opt: no valid mode at the seed design (raw modes listed above)")
                 cache[] = (J = 1e3, ∇ = zeros(length(x)))
-                _log_row(logio, log_obs, n_eval[], time()-t_start, 1e3, Dict{Symbol,Float64}(), x)
+                _log_row(logio, log_obs, n_eval[], time()-t_start, 1e3, Dict{Symbol,Float64}(), row(x))
             else
                 dk2, y, b = _dk2_dp(x, rm, grid, A, inv_ϵr, M, εof, W; δ=1e-7)
                 F = needs_F ? _shifted_lu(A, rm.k_sq) : nothing
@@ -483,10 +526,20 @@ function adj_opt(seed_design, FOMs;
                 end
                 J, ∇, ob = _fom_and_grad(rm.k_sq, dk2, FOMs; fields)
                 ob[:pml_frac] = _pml_fraction(rm, grid, inv_ϵr)
+                if track !== nothing
+                    ob[:overlap]      = xref[]  === nothing ? 1.0 : _overlap(rm.raw_E, xref[], wv)
+                    ob[:overlap_seed] = xseed[] === nothing ? 1.0 : _overlap(rm.raw_E, xseed[], wv)
+                    xseed[] === nothing && (xseed[] = copy(rm.raw_E))
+                end
+                if best[] === nothing || J < best[].J
+                    best[] = (; n = n_eval[], x = copy(x), J, λ = ob[:λ], Q = ob[:Q])
+                    track === nothing || (xref[] = copy(rm.raw_E))
+                end
                 cache[]  = (; J, ∇)
-                @printf("[%3d] J=%.4f  λ=%.2f nm  Q=%.1f%s\n", n_eval[], J, ob[:λ]*1000,
-                        ob[:Q], haskey(ob, :V) ? @sprintf("  V=%.4f", ob[:V]) : "")
-                _log_row(logio, log_obs, n_eval[], time()-t_start, J, ob, x)
+                @printf("[%3d] J=%.4f  λ=%.2f nm  Q=%.1f%s%s\n", n_eval[], J, ob[:λ]*1000,
+                        ob[:Q], haskey(ob, :V) ? @sprintf("  V=%.4f", ob[:V]) : "",
+                        track === nothing ? "" : @sprintf("  ovl=%.2f seed=%.2f", ob[:overlap], ob[:overlap_seed]))
+                _log_row(logio, log_obs, n_eval[], time()-t_start, J, ob, row(x))
             end
         end
         return cache[]
@@ -497,13 +550,17 @@ function adj_opt(seed_design, FOMs;
     result = try
         lower === nothing ?
             optimize(f, g!, p0, LBFGS(; linesearch), options) :
-            optimize(f, g!, lower, upper, p0, Fminbox(LBFGS(; linesearch)), options)
+            optimize(f, g!, lower, upper, p0, Fminbox(LBFGS(; linesearch); mu0), options)
     finally
         logio !== nothing && close(logio)
     end
 
-    w, subs, tc = _unpack(Optim.minimizer(result), nw, tspec, substrates, tCBG)
-    return (; design = w, tCBG = tc, substrates = subs, fom = Optim.minimum(result),
+    # Return the lowest-J evaluation, not the optimizer's last iterate.
+    b = best[]
+    @printf("adj_opt: returning eval %d (lowest J = %.4f)\n", b.n, b.J)
+    logpath === nothing || open(io -> println(io, "# returned: eval $(b.n) (lowest J)"), logpath, "a")
+    w, subs, tc = _unpack(b.x, nw, tspec, substrates, tCBG)
+    return (; design = w, tCBG = tc, substrates = subs, fom = b.J, mode = (; λ = b.λ, Q = b.Q),
               grid, result, logfile = logpath)
 end
 
