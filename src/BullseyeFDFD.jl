@@ -9,6 +9,7 @@ using SpecialFunctions
 using Optim
 using Dates
 using LineSearches
+using LBFGSB: L_BFGS_B, setulb
 
 include("geometry.jl")     # build_geometry: design vector → role blocks (eye/trench/ring/buffer) + stack
 include("grid.jl")         # CylindricalGrid + conformal_grid ((ρ, z) mesh: feature edges on nodes, stretched padding)

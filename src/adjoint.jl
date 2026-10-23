@@ -368,25 +368,69 @@ _fmt_obs(s, v) = s === :λ ? @sprintf("%.6f", v) :
                  s === :Q ? @sprintf("%.2f", v) :
                             @sprintf("%.6g", v)
 
-function _open_log(save_data, seed, cols, log_obs, meta)
-    save_data === false && return nothing, nothing
+_git(args...) = try readchomp(pipeline(`git -C $(pkgdir(@__MODULE__)) $args`; stderr=devnull)) catch; "" end
+
+# Uncommitted src/ + Project.toml changes, so a "-dirty" run can be reproduced (commit + patch).
+# Written once per run folder, plus code_round<k>.patch if a later round ran different code.
+function _save_patch(rundir, k)
+    d = _git("diff", "HEAD", "--", "src", "Project.toml") * "\n"
+    p = joinpath(rundir, "code.patch")
+    isfile(p) && read(p, String) == d && return
+    write(isfile(p) ? joinpath(rundir, "code_round$k.patch") : p, d)
+end
+
+# Log layout: results/<yymmdd-HHMMSS>[_label]/round<k>.csv, one folder per run. A round seeded from a
+# previous result (adj_opt(prev, …)) writes the next round<k>.csv into that result's folder. With
+# save_data = a .jl path (@__FILE__) the folder sits next to that script and keeps a copy of it.
+# An explicit .csv path is used as given (no run folder, no index).
+function _open_log(save_data, label, prev, seed, cols, log_obs, meta)
+    save_data === false && return nothing, nothing, 1
+    pf = prev === nothing || !hasproperty(prev, :logfile) ? nothing : prev.logfile
+    k  = pf === nothing ? 1 : (hasproperty(prev, :round) ? prev.round : 1) + 1
     if save_data isa AbstractString && endswith(save_data, ".csv")
         path = save_data; mkpath(dirname(path))
     else
-        base = save_data isa AbstractString ? save_data :
-               (isempty(PROGRAM_FILE) ? pwd() : dirname(abspath(PROGRAM_FILE)))
-        path = joinpath(mkpath(joinpath(base, "results")),
-                        Dates.format(now(), "yymmdd-HHMMSS") * ".csv")
+        script = save_data isa AbstractString && endswith(save_data, ".jl") ? abspath(save_data) : nothing
+        base   = script !== nothing ? dirname(script) : save_data isa AbstractString ? save_data :
+                 (isempty(PROGRAM_FILE) ? pwd() : dirname(abspath(PROGRAM_FILE)))
+        rundir = pf !== nothing && occursin(r"^round\d+\.csv$", basename(pf)) ? dirname(pf) :
+                 joinpath(base, "results", Dates.format(now(), "yymmdd-HHMMSS") * (isempty(label) ? "" : "_$label"))
+        mkpath(rundir)
+        path = joinpath(rundir, "round$k.csv")
+        isfile(path) && (path = joinpath(rundir, "round$k-" * Dates.format(now(), "HHMMSS") * ".csv"))
+        script === nothing || isfile(joinpath(rundir, basename(script))) || cp(script, joinpath(rundir, basename(script)))
+        endswith(_git("describe", "--always", "--dirty", "--tags"), "-dirty") && _save_patch(rundir, k)
     end
     io = open(path, "w")
-    gh = try readchomp(pipeline(`git -C $(pkgdir(@__MODULE__)) describe --always --dirty --tags`; stderr=devnull))
-         catch; "unknown" end
-    println(io, "# git=$gh  version=$(pkgversion(@__MODULE__))")
+    gh = _git("describe", "--always", "--dirty", "--tags")
+    println(io, "# git=$(isempty(gh) ? "unknown" : gh)  version=$(pkgversion(@__MODULE__))")
+    println(io, "# run: $(basename(dirname(path)))  round $k" *
+                (pf === nothing ? "" : "  (seeded from $(basename(pf))" *
+                                       (hasproperty(prev, :best_eval) ? " eval $(prev.best_eval))" : ")")))
     for line in meta; println(io, "# ", line); end
     println(io, "# seed=", seed)
     println(io, "eval,elapsed_s,J,", join(string.(log_obs), ","), ",", join(cols, ","))
     flush(io)
-    return io, path
+    return io, path, k
+end
+
+const _INDEX_OBS = (:λ, :Q, :V, :Fp, :η, :ηG, :overlap_seed)
+
+# One line per finished round in results/index.csv (only for logs inside a run folder).
+function _index_row(path, k, started, optimizer, thickness, grid_kwargs, np, nevals, b, stop)
+    occursin(r"^round\d+(-\d+)?\.csv$", basename(path)) || return
+    idx = joinpath(dirname(dirname(path)), "index.csv")
+    new = !isfile(idx)
+    open(idx, "a") do io
+        new && println(io, "run,round,started,git,optimizer,thickness,grid,params,evals,returned_eval,J,",
+                           join(string.(_INDEX_OBS), ","), ",stop")
+        grid = isempty(grid_kwargs) ? "default" : join(("$s=$v" for (s, v) in pairs(grid_kwargs)), " ")
+        thk  = isempty(thickness) ? "fixed" : join(string.(keys(thickness)), "+")
+        obs  = join((haskey(b.ob, s) ? _fmt_obs(s, b.ob[s]) : "" for s in _INDEX_OBS), ",")
+        println(io, join((basename(dirname(path)), k, Dates.format(started, "yyyy-mm-dd HH:MM"),
+                          _git("describe", "--always", "--dirty", "--tags"), optimizer, thk, grid, np, nevals,
+                          b.n, @sprintf("%.6f", b.J)), ","), ",", obs, ",\"", stop, "\"")
+    end
 end
 
 function _log_row(io, log_obs, n_eval, elapsed, J, ovals, x)
@@ -399,6 +443,38 @@ end
 
 _adj_options(iterations) = Optim.Options(; iterations, outer_iterations=10, x_abstol=1e-3,
                                            f_reltol=1e-4, outer_f_reltol=1e-4, show_trace=true)
+
+const _FTOL     = 1e-4   # L-BFGS-B stops once each of _PATIENCE iterations in a row lowers J by ≤ _FTOL·|J|
+const _PATIENCE = 3      # (relative to J itself: Fortran's own factr test floors |J| at 1, i.e. absolute for |J| < 1)
+const _PGTOL    = 1e-5   # … or once the largest projected-gradient entry is below this
+
+# L-BFGS-B (Byrd, Lu, Nocedal & Zhu): bounds enforced by projection, so a parameter can sit on its
+# bound while the others keep moving; no barrier term enters J. The reverse-communication loop is
+# driven here so the stopping test can be relative.
+function _lbfgsb(f, g!, x0, lower, upper; maxiter, m=10)
+    n = length(x0)
+    o = L_BFGS_B(n, m)
+    o.l .= something(lower, fill(-Inf, n)); o.u .= something(upper, fill(Inf, n))
+    o.nbd .= [isinf(l) ? (isinf(u) ? 0 : 3) : (isinf(u) ? 1 : 2) for (l, u) in zip(o.l, o.u)]
+    x = copy(x0); fx = Inf; Jprev = Inf; slow = 0; it = 0
+    done(msg) = (; minimum = fx, minimizer = x, iterations = it, message = msg)
+    o.task[1:5] = b"START"
+    while true
+        setulb(n, m, x, o.l, o.u, o.nbd, fx, o.g, 0.0, _PGTOL, o.wa, o.iwa, o.task, -1,
+               o.csave, o.lsave, o.isave, o.dsave)
+        if o.task[1:2] == b"FG"
+            fx = f(x); g!(o.g, x)
+        elseif o.task[1:5] == b"NEW_X"
+            it += 1
+            slow  = Jprev - fx ≤ _FTOL * abs(fx) ? slow + 1 : 0
+            Jprev = fx
+            it ≥ maxiter        && return done("STOP: iteration limit ($maxiter)")
+            slow ≥ _PATIENCE    && return done("CONVERGENCE: ΔJ ≤ $(_FTOL)·|J| for $(_PATIENCE) iterations")
+        else
+            return done(rstrip(String(copy(o.task))))
+        end
+    end
+end
 
 _overlap(a, b, w) = abs(sum(w .* a .* conj.(b))) / sqrt(sum(w .* abs2.(a)) * sum(w .* abs2.(b)))
 
@@ -428,11 +504,15 @@ function adj_opt(seed_design, FOMs;
                  substrates, nClad, nCBG, tCBG, slotted=false, thickness=(;),
                  λ=0.780, NA=nothing, lower=nothing, upper=nothing,
                  Nmodes=10, m=1, grid_kwargs=(;),
-                 σ_sel=0.020, Qfloor=30.0, track=0.5, ref=nothing, save_data=false,
-                 iterations=50, linesearch=BackTracking(), mu0=NaN,
-                 options=_adj_options(iterations))
+                 σ_sel=0.020, Qfloor=30.0, track=0.5, ref=nothing, save_data=false, label="",
+                 optimizer=:lbfgsb, iterations=nothing,
+                 linesearch=BackTracking(), mu0=NaN, options=nothing)   # the last three: :fminbox only
 
     m == 1 || error("adj_opt supports m = 1 only in this version (got m = $m)")
+    optimizer in (:fminbox, :lbfgsb) ||
+        throw(ArgumentError("optimizer must be :fminbox or :lbfgsb, got :$optimizer"))
+    iterations = something(iterations, optimizer === :lbfgsb ? 200 : 50)   # L-BFGS-B: a cap; Fminbox: per inner run
+    options    = something(options, _adj_options(iterations))
     tspec = _thickness_spec(thickness, substrates)
     nw    = length(seed_design)
     p0    = [seed_design; Float64[s === :tCBG ? tCBG : substrates[i].height for (s, i) in tspec]]
@@ -465,19 +545,24 @@ function adj_opt(seed_design, FOMs;
     needs_F  = needs_V || needs_ηG || needs_η
     (needs_ηG || needs_η) && NA === nothing &&
         error("η/ηG figures of merit require an NA (pass NA=… to adj_opt)")
-    meta = ["cbg: nClad=$nClad  nCBG=$nCBG  tCBG=$tCBG",
+    meta = ["cbg: nClad=$nClad  nCBG=$nCBG  tCBG=$tCBG  slotted=$slotted",
             "substrates: " * join(["(n=$(s.n), h=$(s.height))" for s in substrates], "  "),
-            "solve: grid_kwargs=$grid_kwargs  Nmodes=$Nmodes  m=$m",
-            "FOM: " * join([t.label for t in FOMs], " · ")]
-    push!(meta, lower === nothing ? "bounds: none" :
-                "bounds: p1–p$nw lower=$(lower[1:nw])  upper=$(upper[1:nw])  (Fminbox mu0=$(isnan(mu0) ? "auto" : mu0))")
+            "solve: grid_kwargs=$grid_kwargs  Nmodes=$Nmodes  m=$m  λ=$λ",
+            "FOM: " * join([t.label for t in FOMs], " · ") * (NA === nothing ? "" : "  (NA=$NA)"),
+            "select: Qfloor=$Qfloor  PML fraction ≤ 0.5  σ_sel=$σ_sel"]
+    push!(meta, lower === nothing ? "bounds: none" : "bounds: p1–p$nw lower=$(lower[1:nw])  upper=$(upper[1:nw])")
+    push!(meta, optimizer === :lbfgsb ?
+                "optimizer: L-BFGS-B  m=10  maxiter=$iterations  stop: ΔJ ≤ $(_FTOL)·|J| for $(_PATIENCE) iterations, pgtol=$_PGTOL" :
+                "optimizer: $(lower === nothing ? "LBFGS" : "Fminbox(LBFGS)")  iterations=$iterations" *
+                "  mu0=$(isnan(mu0) ? "auto" : mu0)")
     isempty(tspec) || push!(meta, "thickness: " * join(("$s ∈ $b" for (s, b) in pairs(thickness)), "  "))
     track === nothing || push!(meta, "track: highest overlap with the best point's mode, ≥ $track" *
                                      (refλQ === nothing ? "" : "; seed mode nearest λ=$(refλQ.λ), Q=$(refλQ.Q)"))
     nsub = length(substrates) - 1                                # finite layers; the last one is the wafer
     cols = [["p$i" for i in 1:nw]; "tCBG"; ["substrate$i" for i in 1:nsub]]
     row(x) = ((w, subs, tc) = _unpack(x, nw, tspec, substrates, tCBG); [w; tc; [s.height for s in subs[1:nsub]]])
-    logio, logpath = _open_log(save_data, row(p0), cols, log_obs, meta)
+    started = now()
+    logio, logpath, rnd = _open_log(save_data, label, ref, row(p0), cols, log_obs, meta)
 
     cache_x = Ref(Float64[]); cache = Ref{Any}(nothing); n_eval = Ref(0)
     t_start = time()
@@ -532,7 +617,7 @@ function adj_opt(seed_design, FOMs;
                     xseed[] === nothing && (xseed[] = copy(rm.raw_E))
                 end
                 if best[] === nothing || J < best[].J
-                    best[] = (; n = n_eval[], x = copy(x), J, λ = ob[:λ], Q = ob[:Q])
+                    best[] = (; n = n_eval[], x = copy(x), J, λ = ob[:λ], Q = ob[:Q], ob = copy(ob))
                     track === nothing || (xref[] = copy(rm.raw_E))
                 end
                 cache[]  = (; J, ∇)
@@ -548,19 +633,29 @@ function adj_opt(seed_design, FOMs;
     g!(G, x) = (G .= evaluate(x).∇)
 
     result = try
-        lower === nothing ?
-            optimize(f, g!, p0, LBFGS(; linesearch), options) :
-            optimize(f, g!, lower, upper, p0, Fminbox(LBFGS(; linesearch); mu0), options)
+        optimizer === :lbfgsb ? _lbfgsb(f, g!, p0, lower, upper; maxiter=iterations) :
+        lower === nothing     ? optimize(f, g!, p0, LBFGS(; linesearch), options) :
+                                optimize(f, g!, lower, upper, p0, Fminbox(LBFGS(; linesearch); mu0), options)
     finally
         logio !== nothing && close(logio)
     end
 
     # Return the lowest-J evaluation, not the optimizer's last iterate.
-    b = best[]
+    b    = best[]
+    stop = optimizer === :lbfgsb ? "L-BFGS-B: $(result.message) after $(result.iterations) iterations" :
+           "$(lower === nothing ? "LBFGS" : "Fminbox"): $(Optim.converged(result) ? "converged" : "not converged")" *
+           " after $(Optim.iterations(result)) iterations"
+    println("adj_opt: ", stop)
     @printf("adj_opt: returning eval %d (lowest J = %.4f)\n", b.n, b.J)
-    logpath === nothing || open(io -> println(io, "# returned: eval $(b.n) (lowest J)"), logpath, "a")
+    if logpath !== nothing
+        open(logpath, "a") do io
+            println(io, "# stop: ", stop)
+            println(io, "# returned: eval $(b.n) (lowest J)")
+        end
+        _index_row(logpath, rnd, started, optimizer, thickness, grid_kwargs, length(p0), n_eval[], b, stop)
+    end
     w, subs, tc = _unpack(b.x, nw, tspec, substrates, tCBG)
     return (; design = w, tCBG = tc, substrates = subs, fom = b.J, mode = (; λ = b.λ, Q = b.Q),
-              grid, result, logfile = logpath)
+              round = rnd, best_eval = b.n, grid, result, logfile = logpath)
 end
 

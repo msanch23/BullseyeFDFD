@@ -689,4 +689,15 @@ const grid = conformal_grid(geom, λ; gridkw...)
         @test B._follow_mode(raw, randn(ComplexF64, length(md.raw_E)), w, 0.5, 30.0, gsolve, iϵ) === nothing
         @test_throws ArgumentError adj_opt((; design = [0.1], substrates = [], tCBG = 0.1), []; tCBG = 0.2)
     end
+
+    # L-BFGS-B holds a parameter on its bound while the other converges (Rosenbrock, x₂ ≤ 0.5 active).
+    @testset "L-BFGS-B — active bound, stop message" begin
+        f(x)     = (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2
+        g!(G, x) = (G[1] = -2(1 - x[1]) - 400x[1] * (x[2] - x[1]^2); G[2] = 200(x[2] - x[1]^2); G)
+        r = BullseyeFDFD._lbfgsb(f, g!, [-1.2, 0.3], [-2.0, -2.0], [2.0, 0.5]; maxiter=200)
+        @test r.minimizer[2] == 0.5 && isapprox(r.minimizer[1], 0.7086; atol=1e-2)
+        @test startswith(r.message, "CONVERGENCE")
+        @test_throws ArgumentError adj_opt([0.1], []; substrates=[], nClad=1.0, nCBG=3.5, tCBG=0.1,
+                                           optimizer=:newton)
+    end
 end

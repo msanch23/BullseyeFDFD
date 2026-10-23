@@ -34,6 +34,6 @@ JuliaLocalPreferences.toml
 validation/comsol/comsol_farfield.ipynb
 validation/comsol/results/farfield.csv
 
-# adj_opt run logs written by the examples (save_data=@__DIR__)
-examples/results/*.csv
+# adj_opt run folders written by the examples (results/<run>/round<k>.csv, index.csv, code.patch)
+examples/results/
 
