@@ -17,26 +17,35 @@ Requires Julia ≥ 1.12.
 
 ## Status / Scope
 - [X] Forward simulation + modal/driven analysis
+- [X] Azimuthal order m
+  - [X] m = 1 (in-plane dipole emitters)
+  - [ ] m = 0 (axial dipole emitters)
 - [X] Convergence + Time/Ram curves — [view the convergence study](validation/convergence/simulation_convergence.ipynb)
-- [X] COMSOL Validation
-- [ ] Adjoint Optimization
+- [X] COMSOL Validation — [view the COMSOL sweeps](validation/comsol/comsol_validation.ipynb)
+- [X] Adjoint Optimization — [view the gradient check](validation/adjoint/fd_vs_adjoint.ipynb)
+  - [X] Eigenvalue
+  - [X] Eigenvector
+  - [ ] Dipole-Driven
 - [ ] Add examples of published papers
 - [ ] Experimental Validation
 
 ## Features
-- Cylindrical (ρ,z) FDFD with azimuthal mode number m
+- Cylindrical (ρ,z) FDFD with azimuthal mode number m = 1
+- Unslotted and Slotted Cavities
 - Conformal Auto-Meshing
-- Subpixel-Smoothed Materials
+- Anisotropic Subpixel-Smoothed Materials
 - Stretched Coordinate-Perfectly Matched Layers (SC-PMLs)
-- Eigenmode solver
-- Driven-dipole solver
+- Eigenmode solver — λ, Q, mode volume, Purcell factor, confinement factor
+- Far-field and collection efficiency into a numerical aperture
+- Driven-dipole solver — LDOS Purcell factor
+- Adjoint gradient optimization (L-BFGS-B) of feature widths and layer thicknesses, with λ, Q, V, Fp, η and ηG targets
 
 ## Usage
 ### Bullseye Design
 The eye, trenches, rings, and buffer are each a radial __width__ (μm), laid down outward from the center (ρ=0).
 So the whole cavity is one vector:
 ```julia
-design = [0.355000,             # eye
+design = [0.355000,             # eye radius
           0.100000, 0.370000,   # trench 1, ring 1
           0.100000, 0.370000,   # trench 2, ring 2
           0.100000, 0.370000,   # trench 3, ring 3
@@ -47,7 +56,7 @@ design = [0.355000,             # eye
           0.100000, 0.370000,   # trench 8, ring 8
           0.100000, 0.370000,   # trench 9, ring 9
           0.100000, 0.370000,   # trench 10, ring 10
-          0.100000];            # buffer
+          0.100000];            # buffer width
 ```
 To turn the design into a geometry, we need to specify materials and thicknesses for both the cavity and substrates:
 ```julia
@@ -180,10 +189,68 @@ sim.driven.Purcell     # LDOS Purcell factor (P_struct / P_bulk)
 sim.driven.normE       # |E| of the driven field
 ```
 ### Optimization
-Shape optimization via adjoint eigenvalues and eigenvectors, and driven-dipole adjoint field currently under construction.
+Adjoint gradients and L-BFGS-B optimize the feature widths, and optionally tCBG and the substrate thicknesses, within bounds.
+#### Figures of Merit
+The figures of merit are given as a list:
+```julia
+FOMs = [λ_target(0.780), Q_target(:max)];   # maximize Q at λ = 0.780 µm
+
+FOMs = [λ_target(0.7825; σ=0.005, kind=:penalty), Q_target(78.25; w=50),
+        V_target(:min), η_target(:max), ηG_target(:max)];   # min V, max η and ηG at λ = 0.7825 µm, Q ≈ 78.25
+```
+- `:max`/`:min` terms are rewards that multiply: Q, Fp, η, ηG and 1/V. `Q_target(:max)` with `V_target(:min)` is proportional to `Fp_target(:max)` (Q/V = 4π²/3 · Fp).
+- `λ_target` multiplies that product by a Lorentzian of width σ around λ0; with `kind=:penalty` it adds ((λ − λ0)/σ)² instead.
+- Terms with a target value add a penalty w·((x − x0)/x0)².
+- `adj_opt` minimizes J = −(product) + penalties.
+- η and ηG are computed through an aperture, so pass `NA=…` to `adj_opt`.
+#### Running an Optimization
+`opt_kwargs` sets the bounds on every width and, optionally, the slab (tCBG) and substrate thicknesses, in µm.
+It is recommended to use a coarser grid for the optimization; we trade a slight simulation error for quicker evaluations ([convergence study](validation/convergence/simulation_convergence.ipynb)).
+```julia
+grid_kwargs = (; λPts=24, geoPts=8);
+opt_kwargs  = (; nClad, nCBG=nSiN, λ=0.780, NA=0.4, # If η, ηG are missing from FOMs, then any defined NA is ignored.
+                 lower=fill(0.05, length(design)), upper=fill(1.00, length(design)),
+                 thickness=(; tCBG=(0.15, 0.22), substrate1=(0.65, 0.85)),
+                 Nmodes=10, grid_kwargs,
+                 save_data=@__FILE__, label="sanchez");
+
+res1 = adj_opt(design, FOMs; substrates, tCBG, opt_kwargs...); # First round takes bullseye and substrate thicknesses
+res2 = adj_opt(res1, FOMs; opt_kwargs...); # later rounds continue from the previous result (design, thicknesses, tracked mode)
+res3 = adj_opt(res2, FOMs; opt_kwargs...);
+```
+Each round builds a grid conformal to its starting design and keeps it fixed; as the widths move, the interfaces drift off the grid lines.
+To avoid optimizing for a stale grid, it is recommended to reoptimize the first round's result - usually a few more percent of performance is found. Stop the optimization loop once the optimizations no longer improve J.
+A round stops when J improves by less than 1e-4·|J| for 3 iterations, or at `iterations` (default 200).
+Each run writes `results/<yymmdd-HHMMSS>_<label>/` next to the script, containing `round<k>.csv` and a copy of the script. It also adds one row per round to `results/index.csv`.
+
+#### Results
+Here's what's available after an optimization round:
+```julia
+res3.design       # optimized widths (µm)
+res3.tCBG         # optimized slab thickness
+res3.substrates   # substrates with the optimized heights
+res3.fom          # best J, with res3.mode = (λ, Q) at that point
+```
+`adj_opt` returns the lowest-J evaluation of the round, not the optimizer's last step.
+
+The optimization's numbers come from the coarse grid each round froze. Evaluate the optimized design on a fresh grid at the accurate setting (36, 24). 
+```julia
+geometry = build_geometry(res3.design, res3.substrates, nClad, nSiN, res3.tCBG);
+grid     = conformal_grid(geometry, λ0; λPts=36, geoPts=24);
+ϵ        = build_epsilon(geometry, grid);
+sim      = solve_sim(grid, ϵ, λ0; Nmodes=10);   # add NA for η and ηG
+```
+There are two examples found under `examples/`:
+  - [examples/adjopt_sanchezBullseye.jl](examples/adjopt_sanchezBullseye.jl): target λ and maximum Q, with thickness optimization.
+  - [examples/adjopt_perovskiteBullseye.jl](examples/adjopt_perovskiteBullseye.jl): slotted cavity, with target λ, target Q, minimum V, maximum η and ηG.
 
 ## Validation
+Two independent checks: the physics against a commercial finite-element solver (COMSOL), and the gradients against brute-force finite differences.
 ### COMSOL
+To validate the solver with commercial software, we compare parameter (rEye, tCBG, tSiO2) sweeps between COMSOL and BullseyeFDFD: [COMSOL sweeps](validation/comsol/comsol_validation.ipynb)
+
+Ratios are FDFD/COMSOL, and r is the correlation along the sweep (how well the trends track).
+"Same-mode points" counts the points where both solvers report the same mode. The one rEye exclusion, at 0.31 µm, is where the design mode tunes out of the search window.
 <!-- readme:validation/comsol/results/summary.csv -->
 | Sweep | Quantity | Same-mode points | FDFD/COMSOL mean | FDFD/COMSOL std | Max. difference (%) | Correlation r |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -208,8 +275,14 @@ Shape optimization via adjoint eigenvalues and eigenvectors, and driven-dipole a
 
 *λPts: 36 · geoPts: 24*
 <!-- /readme:validation/comsol/results/summary.csv -->
+- λ agrees to 0.03 % (≈ 0.2 nm). The gap closes with refinement: the convergence study extrapolates λ = 780.22 ± 0.13 nm, against COMSOL's 780.20.
+- CF and Ceff_NA agree on average within about 1–2 %.
+- Q reads 1–2.5 % lower and V 1–1.6 % higher than COMSOL, and Fp inherits both (2–4 % low).
+- Every quantity tracks along the sweeps: r ≥ 0.97.
 
 ### Adjoint gradients
+The adjoint gradients of J and of each observable (λ, Q, V, Fp, ηG, η) are compared against central finite differences that re-solve the eigenproblem, for all 24 parameters (22 widths, tCBG, tSiO2) of the 10-ring design above, on the optimization grid (24, 8): [gradient check](validation/adjoint/fd_vs_adjoint.ipynb) 
+
 <!-- readme:validation/adjoint/results/summary.csv -->
 | Observable | Median rel. error | Max. rel. error |
 | --- | --- | --- |
@@ -223,7 +296,7 @@ Shape optimization via adjoint eigenvalues and eigenvectors, and driven-dipole a
 
 *Parameters: 24 · FD step δ: 1e-07 · λPts: 24 · geoPts: 8*
 <!-- /readme:validation/adjoint/results/summary.csv -->
-
+Median relative error about 10⁻⁸, maximum below 5 × 10⁻⁶. 
 ## Testing
 BullseyeFDFD comes with a test suite for geometry, meshing, materials, curl operators, and both the eigenmode and driven solves.
 ```julia
