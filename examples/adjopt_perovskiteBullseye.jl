@@ -32,12 +32,12 @@ FOMs = [λ_target(λ0; σ=0.005, kind=:penalty), Q_target(78.25; w=50), V_target
 grid_kwargs = (; λPts=24, geoPts=8);
 opt_kwargs  = (; nClad, nCBG=nSiN, slotted=true, λ=λ0, NA,
                  lower=[0.0375; fill(0.05, length(design)-1)], upper=[0.100; fill(1.00, length(design)-1)],
-                 Nmodes=10, iterations=50, grid_kwargs,
-                 save_data=@__DIR__);
+                 Nmodes=10, grid_kwargs,
+                 save_data=@__FILE__, label="perovskite");
 
-res1 = adj_opt(design,      FOMs; substrates,      tCBG,      opt_kwargs...);
-res2 = adj_opt(res1.design, FOMs; res1.substrates, res1.tCBG, opt_kwargs...);
-res3 = adj_opt(res2.design, FOMs; res2.substrates, res2.tCBG, opt_kwargs...);
+res1 = adj_opt(design, FOMs; substrates, tCBG, opt_kwargs...);
+res2 = adj_opt(res1, FOMs; opt_kwargs...);
+res3 = adj_opt(res2, FOMs; opt_kwargs...);
 
 geometry = build_geometry(res3.design, res3.substrates, nClad, nSiN, res3.tCBG, slotted=true);
 grid     = conformal_grid(geometry, λ0; λPts=36, geoPts=24);
