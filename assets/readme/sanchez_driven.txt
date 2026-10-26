@@ -1,3 +1,3 @@
-# provenance: git=b57fa2cbe9c3dec7e200f4bf41d4d438b6884e29 src_clean=true version=0.6.0 grid=890×163 (conformal_grid defaults) date=2026-10-21
+# provenance: git=27661f112841c63b7d8687a39d974d1721ee2849 src_clean=true version=0.6.0 grid=890×163 (conformal_grid defaults) date=2026-10-26
 Purcell factor = 6.450 @ 781.00 nm
 ρ polarized dipole @ (ρ,z): (2, 123)
