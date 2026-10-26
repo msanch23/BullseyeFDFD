@@ -1,5 +1,7 @@
 # BullseyeFDFD
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23674812.svg)](https://doi.org/10.5281/zenodo.23674812)
+
 A cylindrical FDFD solver for (inverse) designing, simulating, and optimizing Bullseye (Circular Bragg Grating) cavities.
 
 <p align="center">
@@ -308,15 +310,16 @@ Pkg.test("BullseyeFDFD")
 The derivations behind the solver are (in-progress) written up in [`notes/`](notes/).
 
 ## Citation
-A paper is in preparation; details will be updated on publication. For now:
+Please cite the software through its Zenodo DOI. The DOI below always resolves to the latest release; for exact reproducibility, cite the DOI of the version you used, listed on the Zenodo page. A paper is in preparation.
 ```bibtex
 @misc{sanchez_bullseyefdfd_2026,
-  author       = {Sanchez, Martin},
-  title        = {{BullseyeFDFD}: a cylindrical FDFD solver for
-                  bullseye (circular Bragg grating) cavities},
-  year         = {2026},
-  version      = {0.6.0},
-  howpublished = {\url{https://github.com/msanch23/BullseyeFDFD}}
+  author    = {Sanchez, Martin},
+  title     = {{BullseyeFDFD}: a cylindrical FDFD solver for
+               bullseye (circular Bragg grating) cavities},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.23674812},
+  url       = {https://doi.org/10.5281/zenodo.23674812}
 }
 ```
 
