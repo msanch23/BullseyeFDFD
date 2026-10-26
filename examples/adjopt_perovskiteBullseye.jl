@@ -27,7 +27,8 @@ design = [0.037500, 0.300000,   # slot, eye
 λ0 = 0.7825;
 NA = 0.4;
 
-FOMs = [λ_target(λ0; σ=0.005, kind=:penalty), Q_target(78.25; w=50), V_target(:min), η_target(:max), ηG_target(:max)];
+FOMs       = [λ_target(λ0; σ=0.005, kind=:penalty), Q_target(78.25; w=50),  V_target(:min), η_target(:max), ηG_target(:max)];
+FOMs_tight = [λ_target(λ0; σ=0.001, kind=:penalty), Q_target(78.25; w=500), V_target(:min), η_target(:max), ηG_target(:max)];
 
 grid_kwargs = (; λPts=24, geoPts=8);
 opt_kwargs  = (; nClad, nCBG=nSiN, slotted=true, λ=λ0, NA,
@@ -37,7 +38,7 @@ opt_kwargs  = (; nClad, nCBG=nSiN, slotted=true, λ=λ0, NA,
 
 res1 = adj_opt(design, FOMs; substrates, tCBG, opt_kwargs...);
 res2 = adj_opt(res1, FOMs; opt_kwargs...);
-res3 = adj_opt(res2, FOMs; opt_kwargs...);
+res3 = adj_opt(res2, FOMs_tight; opt_kwargs...);
 
 geometry = build_geometry(res3.design, res3.substrates, nClad, nSiN, res3.tCBG, slotted=true);
 grid     = conformal_grid(geometry, λ0; λPts=36, geoPts=24);
